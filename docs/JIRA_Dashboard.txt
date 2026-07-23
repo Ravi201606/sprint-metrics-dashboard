@@ -1,0 +1,54 @@
+Minimalist Sidebar Jira Dashboard Prompt
+
+Create a highly polished, minimalist light-mode Jira Productivity Dashboard with a fixed left-hand navigation sidebar and a spacious right-side grid. Do not use any modals, pop-ups, or click-to-expand details.
+
+Build the application using these custom-named files only:
+- `portal.html` (Main dashboard page)
+- `layout.css` (Clean minimalist sidebar-grid layout)
+- `engine.js` (Frontend logic and metrics calculations)
+- `data-store.js` (Static data wrapper: `window.jiraStore = { ... }`)
+- `harvester.js` (Backend Node.js API data collector)
+- `gateway.js` (Node.js web server running on port 9000)
+
+### 1) Color Palette & Aesthetics (Eco-Minimalist Vibe)
+- Background: soft off-white `#fafaf9` with emerald green accents.
+- Theme colors: Forest Green `#064e3b`, Sage Green `#10b981`, Sand Brown `#d97706`, Slate Grey `#475569`.
+- UI structure: fixed left sidebar (logo + title “Jira Flow Portal” + filters) and a right main content area with a 4-column grid.
+
+### 2) Header, Sidebar & Filters
+- Sidebar must contain exactly two dropdown selectors:
+  1. **Select Sprint** (Agile Sprints)
+  2. **Select Month** (Calendar Months)
+- Filters must be mutually exclusive: selecting one greys out the other with `0.4` opacity.
+- Include an **“Initiate Sync”** button in the sidebar that triggers fetching updated records (no modals/popups).
+
+### 3) Re-ordered Flat Widgets (Top of Main Grid)
+In the main workspace grid, display these flat cards in a 4-column layout above the charts:
+1. **SLA Compliance %**: % of completed issues resolved within an 8-day target cycle time.
+2. **Defect-Free Ratio %**: % of completed issues with zero backward status transitions (no rework loops).
+3. **Overhead Allocations %**: % of logged hours allocated to non-core Jira components.
+4. **Average Sprint Velocity**: average completed tasks per developer in the selected scope.
+
+### 4) Layout & Visualizations
+- Middle row (charts, left/right):
+  - Left: horizontal bar chart of completed tickets per developer (Chart.js).
+  - Right: doughnut chart of issue distribution by priority (High, Medium, Low).
+- Bottom row (core activity sections, 3 columns):
+  - Left: table of individual developer logged hours.
+  - Middle: list of the longest active/stagnant issues.
+  - Right: bulleted card of automated Agile Health Check recommendations based on team performance.
+
+### 5) Backend Server & Harvester
+- `harvester.js`:
+  - Reads `process.env.JIRA_TOKEN`
+  - Fetches last 300 issues including changelogs/worklogs
+  - Writes cleanly into `data-store.js` (via `window.jiraStore` structure used by the frontend)
+- `gateway.js`:
+  - Lightweight Node.js server
+  - Hosts static files
+  - Exposes a `/sync` endpoint that runs the harvester
+
+### 6) Run/Access Note
+Access the dashboard in the browser at:
+👉 http://localhost:9090/  
+(Port 9000 may be unavailable due to Zscaler; the server should fall back to 9090.)
