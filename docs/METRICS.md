@@ -28,8 +28,8 @@ This document provides a clear, up-to-date definition for each of the key metric
 - **Goal**: Provides a real-time snapshot of the team's progress against their sprint commitment.
 
 ## 6. Work Split by Developer (%)
-- **Definition**: A visualization of how work is distributed across developers, attributing effort to the sprint where development work began.
+- **Definition**: A visualization of how work is distributed across developers for completed Stories within the selected sprint.
 - **Formula**: `(Developer's completed Story Points / Total completed Story Points) * 100`. If Story Points are unavailable, the calculation falls back to using the count of completed Stories.
 - **Goal**: Helps to identify whether the sprint workload is evenly distributed or if there is a concentration of work on a few team members.
 - **Developer Attribution**: The developer is identified by analyzing the issue's changelog. The logic finds the first time the story was moved to "In Progress" and attributes the work to the person who was assigned to the story at that time.
-- **Sprint Attribution**: Work is attributed to the sprint that was active when the story first moved into "In Progress". This ensures that development effort is credited to the sprint where the work actually occurred, even if the story was completed in a later sprint.
+- **Sprint Attribution**: Standard sprint boundaries are used. Stories are included in the selected sprint's metric based on their standard sprint assignment in Jira, regardless of when development started, aligning closely with Jira's Sprint Report.

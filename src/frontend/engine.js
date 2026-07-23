@@ -237,66 +237,6 @@ document.addEventListener('DOMContentLoaded', () => {
         return issue.fields.assignee ? issue.fields.assignee.displayName : null;
     }
 
-    const processedStories = [];
-
-    function getSprintForDate(date, allSprints) {
-        if (!date) return null;
-        for (const sprint of allSprints) {
-            if (sprint.startDate && sprint.endDate) {
-                const startDate = new Date(sprint.startDate);
-                const endDate = new Date(sprint.endDate);
-                if (date >= startDate && date <= endDate) {
-                    return sprint;
-                }
-            }
-        }
-        return null;
-    }
-
-    // Pre-process all issues to enrich them with developer and sprint attribution
-    try {
-        const allSprintsForLookup = Array.from(sprintsMap.values());
-        const allCompletedStories = issues.filter(i => i.fields.issuetype.name === 'Story' && (i.fields.status.name === 'Done' || i.fields.status.name === 'Closed'));
-
-        allCompletedStories.forEach(story => {
-            const developer = getDeveloperForStory(story);
-            
-            let firstInProgressDate = null;
-            let firstDoneDate = null;
-
-            if (story.changelog && story.changelog.histories) {
-                const statusChanges = [];
-                story.changelog.histories.forEach(h => {
-                    h.items.forEach(item => {
-                        if (item.field === 'status') {
-                            statusChanges.push({
-                                toString: item.toString,
-                                created: new Date(h.created)
-                            });
-                        }
-                    });
-                });
-                statusChanges.sort((a, b) => a.created - b.created);
-                firstInProgressDate = statusChanges.find(c => c.toString.toLowerCase().includes('in progress'))?.created || null;
-                firstDoneDate = statusChanges.find(c => c.toString.toLowerCase() === 'done')?.created || null;
-            }
-
-            const devSprint = getSprintForDate(firstInProgressDate, allSprintsForLookup);
-            const completionSprint = getSprintForDate(firstDoneDate, allSprintsForLookup);
-
-            processedStories.push({
-                ...story,
-                developer: developer,
-                devSprint: devSprint,
-                completionSprint: completionSprint,
-                storyPoints: story.fields.customfield_10016 || 0
-            });
-        });
-    } catch (e) {
-        console.error("Error during story pre-processing:", e);
-    }
-
-
     // 5. Main Dashboard Render Engine
     function updateDashboard() {
         const selectedSprintId = sprintSelect.value;
@@ -304,7 +244,6 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedSprint = sprintsMap.get(selectedSprintId);
         
         let filteredIssues = issues;
-        let workSplitStories = [];
 
         // Apply mutually exclusive filters
         if (selectedSprintId) {
@@ -316,13 +255,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     return match && match[1] === selectedSprintId;
                 });
             });
-            workSplitStories = processedStories.filter(story => story.devSprint && story.devSprint.id === selectedSprintId);
-
         } else if (selectedMonth) {
             filteredIssues = issues.filter(issue => {
                 return issue.fields.created && issue.fields.created.startsWith(selectedMonth);
             });
-            // Note: Work Split is sprint-based, so it will be empty for month view
         }
 
         const maintenanceIssues = filteredIssues.filter(issue => {
@@ -570,20 +506,22 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- RENDER CHART: Work Split by Developer (%) ---
         try {
             const devWork = {};
-            workSplitStories.forEach(story => {
-                const devName = story.developer;
+            const completedStories = completedIssues.filter(i => i.fields.issuetype.name === 'Story');
+
+            completedStories.forEach(story => {
+                const devName = getDeveloperForStory(story);
                 if (!devName) return;
 
                 if (!devWork[devName]) {
                     devWork[devName] = { storyPoints: 0, storyCount: 0, issues: [] };
                 }
-                devWork[devName].storyPoints += story.storyPoints;
+                devWork[devName].storyPoints += story.fields.customfield_10016 || 0;
                 devWork[devName].storyCount++;
-                devWork[devName].issues.push(story);
+                devWork[devName].issues.push(story.key);
             });
 
             const totalStoryPoints = Object.values(devWork).reduce((sum, dev) => sum + dev.storyPoints, 0);
-            const totalStories = workSplitStories.length;
+            const totalStories = completedStories.length;
             const useStoryPoints = totalStoryPoints > 0;
 
             const workSplitData = Object.entries(devWork).map(([developer, data]) => {
@@ -606,7 +544,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     insightEl.textContent = 'Work distribution is balanced.';
                 }
             } else {
-                insightEl.textContent = 'No development work started in this sprint.';
+                insightEl.textContent = 'No completed stories with assigned developers in this scope.';
             }
 
             if (workSplitChartInstance) workSplitChartInstance.destroy();
@@ -658,21 +596,15 @@ document.addEventListener('DOMContentLoaded', () => {
                 modalTitle.textContent = 'Work Split by Developer';
                 modalBody.style.gridTemplateColumns = '1fr';
                 nonCompliantList.parentElement.style.display = 'none';
-                compliantList.parentElement.querySelector('h3').textContent = 'Sprint Contribution Details';
+                compliantList.parentElement.querySelector('h3').textContent = 'Sprint Contribution';
 
                 let tableHtml = `<table class="dev-table"><thead><tr><th>Developer</th><th>Completed Stories</th>`;
                 if (useStoryPoints) {
                     tableHtml += `<th>Story Points</th>`;
                 }
-                tableHtml += `<th>% of Work</th><th>Issue & Summary</th><th>Dev Sprint</th><th>Completion Sprint</th></tr></thead><tbody>`;
+                tableHtml += `<th>% of Work</th><th>Issue Keys</th></tr></thead><tbody>`;
 
                 workSplitData.forEach(dev => {
-                    const issueDetails = dev.issues.map(i => `
-                        <div>
-                            <a href="https://jira.worldline-solutions.com/browse/${i.key}" target="_blank">${i.key}</a>
-                            <small>${i.fields.summary ? (i.fields.summary.length > 60 ? i.fields.summary.substring(0,57)+'...' : i.fields.summary) : ''}</small>
-                        </div>`).join('');
-
                     tableHtml += `<tr>
                         <td><strong>${dev.developer}</strong></td>
                         <td>${dev.storyCount}</td>`;
@@ -680,9 +612,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         tableHtml += `<td>${dev.storyPoints}</td>`;
                     }
                     tableHtml += `<td>${dev.percentage.toFixed(1)}%</td>
-                        <td class="issue-cell">${issueDetails}</td>
-                        <td>${dev.issues.map(i => i.devSprint?.name || 'N/A').join(', ')}</td>
-                        <td>${dev.issues.map(i => i.completionSprint?.name || 'N/A').join(', ')}</td>
+                        <td>${dev.issues.join(', ')}</td>
                     </tr>`;
                 });
                 tableHtml += `</tbody></table>`;
