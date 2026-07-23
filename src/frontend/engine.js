@@ -12,8 +12,8 @@ document.addEventListener('DOMContentLoaded', () => {
     const devHoursBody = document.getElementById('developer-hours');
     const stagnantIssuesList = document.getElementById('stagnant-issues');
     const healthCheckList = document.getElementById('health-check');
-    const storyProgressBar = document.getElementById('story-progress-bar');
-    const storyProgressText = document.getElementById('story-progress-text');
+    const sprintProgressValue = document.getElementById('sprint-progress-value');
+    const sprintProgressSub = document.getElementById('sprint-progress-sub');
 
     // Modal Elements
     const modal = document.getElementById('data-modal');
@@ -329,66 +329,6 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('velocity-value').textContent = 'Error';
         }
 
-        // --- RENDER WIDGET: Sprint Progress ---
-        try {
-            let totalOriginalEstimate = 0;
-            let totalTimeSpentSeconds = 0;
-            let issuesWithNoEstimate = 0;
-
-            otherIssues.forEach(issue => {
-                if (issue.fields.timeoriginalestimate) {
-                    totalOriginalEstimate += issue.fields.timeoriginalestimate;
-                } else {
-                    issuesWithNoEstimate++;
-                }
-
-                if (issue.fields.worklog && issue.fields.worklog.worklogs) {
-                    issue.fields.worklog.worklogs.forEach(w => {
-                        if (selectedSprint && selectedSprint.startDate && selectedSprint.endDate) {
-                            const worklogStarted = new Date(w.started);
-                            const sprintStartDate = new Date(selectedSprint.startDate);
-                            const sprintEndDate = new Date(selectedSprint.endDate);
-                            if (worklogStarted >= sprintStartDate && worklogStarted <= sprintEndDate) {
-                                totalTimeSpentSeconds += w.timeSpentSeconds || 0;
-                            }
-                        } else {
-                            totalTimeSpentSeconds += w.timeSpentSeconds || 0;
-                        }
-                    });
-                }
-            });
-
-            const sprintProgressPercentage = totalOriginalEstimate > 0 ? (totalTimeSpentSeconds / totalOriginalEstimate) * 100 : 0;
-
-            document.getElementById('sprint-progress-bar').style.width = `${sprintProgressPercentage}%`;
-            document.getElementById('sprint-progress-text').textContent = `${(totalTimeSpentSeconds / 3600).toFixed(1)} / ${(totalOriginalEstimate / 3600).toFixed(1)} hrs`;
-
-            if (issuesWithNoEstimate > 0) {
-                console.log(`Warning: ${issuesWithNoEstimate} issues in the current sprint scope have no original estimate set.`);
-            }
-
-            const sprintProgressBtn = document.querySelector('button[data-metric="sprint-progress"]');
-            sprintProgressBtn.onclick = () => {
-                modalTitle.textContent = 'Sprint Progress Details';
-                modalBody.style.gridTemplateColumns = '1fr';
-                nonCompliantList.parentElement.style.display = 'none';
-                compliantList.parentElement.querySelector('h3').textContent = 'Issues in Sprint';
-                compliantList.innerHTML = '';
-                otherIssues.forEach(issue => {
-                    const estimate = issue.fields.timeoriginalestimate ? (issue.fields.timeoriginalestimate / 3600).toFixed(1) + 'h' : 'N/A';
-                    const spent = issue.fields.timespent ? (issue.fields.timespent / 3600).toFixed(1) + 'h' : '0h';
-                    const li = document.createElement('li');
-                    li.innerHTML = `<a href="https://jira.worldline-solutions.com/browse/${issue.key}" target="_blank">${issue.key}</a>: ${issue.fields.summary} - <strong>Est: ${estimate}, Spent: ${spent}</strong>`;
-                    compliantList.appendChild(li);
-                });
-                modal.style.display = 'block';
-            };
-
-        } catch (e) {
-            console.error("Error rendering Sprint Progress widget:", e);
-            document.getElementById('sprint-progress-text').textContent = 'Error';
-        }
-
         // --- RENDER WIDGET: Average Cycle Time ---
         try {
             let totalCycleTime = 0;
@@ -459,7 +399,7 @@ document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('cycle-time-value').textContent = 'Error';
         }
 
-        // --- RENDER WIDGET: Stories Taken vs. Done ---
+        // --- RENDER WIDGET: Sprint Progress ---
         try {
             const takenStories = otherIssues.filter(i => i.fields.issuetype.name === 'Story');
             const doneStories = takenStories.filter(i => i.fields.status.name === 'Done' || i.fields.status.name === 'Closed');
@@ -467,14 +407,21 @@ document.addEventListener('DOMContentLoaded', () => {
             const doneCount = doneStories.length;
             const takenCount = takenStories.length;
             
-            const percentage = takenCount > 0 ? (doneCount / takenCount) * 100 : 0;
+            const percentage = takenCount > 0 ? Math.round((doneCount / takenCount) * 100) : 0;
             
-            storyProgressBar.style.width = `${percentage}%`;
-            storyProgressText.textContent = `${doneCount} of ${takenCount} stories done (${Math.round(percentage)}%)`;
+            sprintProgressValue.textContent = `${percentage}%`;
+            sprintProgressSub.textContent = `${doneCount} of ${takenCount} stories completed`;
+
+            const sprintProgressBtn = document.querySelector('button[data-metric="sprint-progress"]');
+            sprintProgressBtn.onclick = () => {
+                const notCompletedStories = takenStories.filter(story => !doneStories.includes(story));
+                const sprintProgressData = { compliant: doneStories, nonCompliant: notCompletedStories };
+                showModal('Sprint Progress (Stories)', sprintProgressData, false, 'Completed Stories', 'Not Completed Stories');
+            };
 
         } catch (e) {
-            console.error("Error rendering Stories Taken vs. Done widget:", e);
-            storyProgressText.textContent = `Error rendering widget`;
+            console.error("Error rendering Sprint Progress widget:", e);
+            sprintProgressValue.textContent = `Error`;
         }
 
         // --- RENDER CHART: Issue Distribution by Priority ---
@@ -617,7 +564,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // --- MODAL LOGIC ---
-    function showModal(title, data, isSingleList = false) {
+    function showModal(title, data, isSingleList = false, compliantHeader = 'Compliant Issues', nonCompliantHeader = 'Non-Compliant Issues') {
         modalTitle.textContent = title;
 
         if (isSingleList) {
@@ -627,14 +574,21 @@ document.addEventListener('DOMContentLoaded', () => {
         } else {
             modalBody.style.gridTemplateColumns = '1fr 1fr';
             nonCompliantList.parentElement.style.display = 'block';
-            compliantList.parentElement.querySelector('h3').innerHTML = `Compliant Issues (<span id="compliant-count">0</span>)`;
+            compliantList.parentElement.querySelector('h3').innerHTML = `${compliantHeader} (<span id="compliant-count">0</span>)`;
+            nonCompliantList.parentElement.querySelector('h3').innerHTML = `${nonCompliantHeader} (<span id="non-compliant-count">0</span>)`;
         }
         
         // Populate compliant list
         compliantList.innerHTML = '';
         data.compliant.forEach(item => {
             const li = document.createElement('li');
-            li.innerHTML = `<a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a>: ${item.summary}`;
+            const summary = item.fields.summary;
+            let displayText = `<a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a>`;
+            if (summary) {
+                const truncatedSummary = summary.length > 80 ? summary.substring(0, 77) + '...' : summary;
+                displayText += ` — ${truncatedSummary}`;
+            }
+            li.innerHTML = displayText;
             compliantList.appendChild(li);
         });
         if (!isSingleList) document.getElementById('compliant-count').textContent = data.compliant.length;
@@ -644,7 +598,13 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!isSingleList) {
             data.nonCompliant.forEach(item => {
                 const li = document.createElement('li');
-                li.innerHTML = `<a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a>: ${item.summary}`;
+                const summary = item.fields.summary;
+                let displayText = `<a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a>`;
+                if (summary) {
+                    const truncatedSummary = summary.length > 80 ? summary.substring(0, 77) + '...' : summary;
+                    displayText += ` — ${truncatedSummary}`;
+                }
+                li.innerHTML = displayText;
                 nonCompliantList.appendChild(li);
             });
             document.getElementById('non-compliant-count').textContent = data.nonCompliant.length;

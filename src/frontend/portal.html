@@ -78,13 +78,11 @@
 			
         </div>
         <div class="widgets-row">
-			<!-- 4. Sprint Progress -->
+            <!-- 4. Sprint Progress -->
             <div class="card widget-card">
                 <h3>Sprint Progress</h3>
-                <div class="progress-bar-container">
-                    <div id="sprint-progress-bar" class="progress-bar-fill"></div>
-                </div>
-                <p id="sprint-progress-text" class="progress-text">0 / 0 man-days</p>
+                <p class="widget-value" id="sprint-progress-value">0%</p>
+                <p class="widget-sub" id="sprint-progress-sub">0 of 0 stories completed</p>
                 <button class="view-data-btn" data-metric="sprint-progress">View Data</button>
             </div>
 			
@@ -107,15 +105,6 @@
 
         <!-- Row 2: Charts Area -->
         <div class="charts-row">
-            <!-- Left: Stories Taken vs Done -->
-            <div class="card chart-card">
-                <h3>Stories Taken vs. Done</h3>
-                <div class="progress-bar-container">
-                    <div id="story-progress-bar" class="progress-bar-fill"></div>
-                </div>
-                <p id="story-progress-text" class="progress-text">0 of 0 stories done (0%)</p>
-            </div>
-            
             <!-- Right: Doughnut Chart of Issue Distribution by Priority -->
             <div class="card chart-card">
                 <h3>Issue Distribution by Priority</h3>

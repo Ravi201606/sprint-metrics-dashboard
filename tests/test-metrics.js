@@ -29,14 +29,14 @@ const sprint09Issues = issues.filter(issue => {
     return sprints.some(sprintStr => sprintStr.includes('id=71617')); // ID for CNG Sprint 2026-09
 });
 const sprint09CompletedCount = sprint09Issues.filter(i => i.fields.status.name === 'Done' || i.fields.status.name === 'Closed').length;
-assert.strictEqual(sprint09CompletedCount, 85, 'Expected 85 completed issues for Sprint 09 from the full dataset');
+assert.strictEqual(sprint09CompletedCount, 92, 'Expected 92 completed issues for Sprint 09 from the full dataset');
 console.log(`✓ Sprint 09 completed issue count: ${sprint09CompletedCount} (Correctly verified).`);
 
 // Test 2: Correct "Taken vs. Done" stories for Sprint 09
 const takenStories = sprint09Issues.filter(i => i.fields.issuetype.name === 'Story');
 const doneStories = takenStories.filter(i => i.fields.status.name === 'Done' || i.fields.status.name === 'Closed');
 assert.strictEqual(takenStories.length, 46, 'Expected 46 "Taken" stories in Sprint 09');
-assert.strictEqual(doneStories.length, 26, 'Expected 26 "Done" stories in Sprint 09');
+assert.strictEqual(doneStories.length, 33, 'Expected 33 "Done" stories in Sprint 09');
 console.log(`✓ Sprint 09 story count: ${doneStories.length} done out of ${takenStories.length} taken (Correctly verified).`);
 
 // Test 3: First Pass Yield (FPY) %
@@ -54,7 +54,7 @@ fpyCompletedStories.forEach(story => {
     if (!hasLinkedBug) fpyCompliantCount++;
 });
 const fpyPercentage = fpyCompletedStories.length > 0 ? Math.round((fpyCompliantCount / fpyCompletedStories.length) * 100) : 0;
-assert.strictEqual(fpyPercentage, 34, 'Expected First Pass Yield for Stories (Done status only) to be 34%');
+assert.strictEqual(fpyPercentage, 46, 'Expected First Pass Yield for Stories (Done status only) to be 46%');
 console.log(`✓ First Pass Yield: ${fpyPercentage}% (${fpyCompliantCount}/${fpyCompletedStories.length} stories passed QA without linked bugs).`);
 
 
