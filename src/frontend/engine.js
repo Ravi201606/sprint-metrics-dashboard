@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const sprintGroup = document.getElementById('sprint-filter-group');
     const monthGroup = document.getElementById('month-filter-group');
     const syncButton = document.getElementById('sync-button');
+    const sprintTrigger = document.getElementById('sprintTrigger');
+    const sprintMenu = document.getElementById('sprintMenu');
+    const sprintValueLabel = sprintTrigger ? sprintTrigger.querySelector('.sprint-value') : null;
     
     const fpyValue = document.getElementById('fpy-value');
     const maintenanceTaxValue = document.getElementById('maintenance-tax-value');
@@ -26,6 +29,244 @@ document.addEventListener('DOMContentLoaded', () => {
     // Global Chart Instances to prevent overlap/leak
     let priorityChartInstance = null;
     let workSplitChartInstance = null;
+
+    // Sprint selector UI state
+    let sprintMenuOptions = [];
+    let visibleSprintOptionElements = [];
+    let highlightedSprintIndex = -1;
+    let sprintSearchQuery = '';
+    let sprintSearchInput = null;
+    let pendingSprintRenderFrame = null;
+
+    function normalizeSprintState(state) {
+        return (state || '').toUpperCase() === 'ACTIVE' ? 'ACTIVE' : 'CLOSED';
+    }
+
+    function ensureSprintSelectorA11y() {
+        if (!sprintTrigger || !sprintMenu) return;
+        sprintTrigger.setAttribute('aria-haspopup', 'listbox');
+        sprintTrigger.setAttribute('aria-expanded', 'false');
+        sprintTrigger.setAttribute('aria-controls', 'sprintMenu');
+        sprintMenu.setAttribute('role', 'listbox');
+        sprintMenu.setAttribute('aria-label', 'Sprint options');
+    }
+
+    function buildSprintMenuOptions(sortedSprints) {
+        sprintMenuOptions = sortedSprints.map(sprint => {
+            const state = normalizeSprintState(sprint.state);
+            return {
+                id: sprint.id,
+                name: sprint.name || `Sprint ${sprint.id}`,
+                nameLower: (sprint.name || '').toLowerCase(),
+                state,
+                label: `${sprint.name} (${state === 'ACTIVE' ? 'Active' : 'Closed'})`
+            };
+        });
+    }
+
+    function updateSprintTriggerLabel() {
+        if (!sprintValueLabel) return;
+        const selectedOption = sprintSelect.options[sprintSelect.selectedIndex];
+        const selectedText = selectedOption ? selectedOption.textContent : '';
+        sprintValueLabel.textContent = selectedText && sprintSelect.value ? selectedText : 'Select Sprint';
+    }
+
+    function getGroupedSprintOptions() {
+        const query = sprintSearchQuery.trim().toLowerCase();
+        const filtered = query
+            ? sprintMenuOptions.filter(sprint => sprint.nameLower.includes(query))
+            : sprintMenuOptions;
+
+        const activeSprint = filtered.find(sprint => sprint.state === 'ACTIVE') || null;
+        const closedSprints = filtered.filter(sprint => sprint.state !== 'ACTIVE');
+
+        return {
+            current: activeSprint ? [activeSprint] : [],
+            recent: closedSprints.slice(0, 5),
+            older: closedSprints.slice(5)
+        };
+    }
+
+    function createSprintSection(title, items, selectedSprintId, fragment) {
+        if (!items.length) return;
+
+        const titleNode = document.createElement('li');
+        titleNode.className = 'sprint-section-title';
+        titleNode.setAttribute('role', 'presentation');
+        titleNode.textContent = title;
+        fragment.appendChild(titleNode);
+
+        items.forEach(sprint => {
+            const option = document.createElement('li');
+            option.className = 'sprint-option';
+            option.dataset.value = sprint.id;
+            option.id = `sprint-option-${sprint.id}`;
+            option.setAttribute('role', 'option');
+            option.setAttribute('tabindex', '-1');
+            option.setAttribute('aria-selected', sprint.id === selectedSprintId ? 'true' : 'false');
+            if (sprint.id === selectedSprintId) {
+                option.classList.add('selected');
+            }
+
+            const label = document.createElement('span');
+            label.textContent = sprint.name;
+
+            const statusTag = document.createElement('span');
+            statusTag.className = `sprint-tag ${sprint.state === 'ACTIVE' ? 'current' : ''}`.trim();
+            statusTag.textContent = sprint.state === 'ACTIVE' ? 'Active' : 'Closed';
+
+            option.appendChild(label);
+            option.appendChild(statusTag);
+            fragment.appendChild(option);
+        });
+    }
+
+    function scheduleSprintMenuRender() {
+        if (pendingSprintRenderFrame) {
+            cancelAnimationFrame(pendingSprintRenderFrame);
+        }
+        pendingSprintRenderFrame = requestAnimationFrame(() => {
+            pendingSprintRenderFrame = null;
+            renderCustomSprintMenu();
+        });
+    }
+
+    function setHighlightedSprintIndex(index, scrollIntoView = true) {
+        if (highlightedSprintIndex >= 0 && visibleSprintOptionElements[highlightedSprintIndex]) {
+            visibleSprintOptionElements[highlightedSprintIndex].classList.remove('is-focused');
+        }
+
+        if (index < 0 || index >= visibleSprintOptionElements.length) {
+            highlightedSprintIndex = -1;
+            sprintMenu.removeAttribute('aria-activedescendant');
+            return;
+        }
+
+        highlightedSprintIndex = index;
+        const option = visibleSprintOptionElements[highlightedSprintIndex];
+        option.classList.add('is-focused');
+        sprintMenu.setAttribute('aria-activedescendant', option.id);
+        if (scrollIntoView) {
+            option.scrollIntoView({ block: 'nearest' });
+        }
+    }
+
+    function selectSprintValue(sprintId) {
+        if (!sprintId) return;
+        sprintSelect.value = sprintId;
+        sprintSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        closeSprintMenu(true);
+    }
+
+    function closeSprintMenu(restoreFocus = false) {
+        if (!sprintMenu || !sprintTrigger) return;
+        sprintMenu.classList.remove('open');
+        sprintTrigger.classList.remove('open');
+        sprintTrigger.setAttribute('aria-expanded', 'false');
+        sprintSearchQuery = '';
+        setHighlightedSprintIndex(-1, false);
+        if (restoreFocus) {
+            sprintTrigger.focus();
+        }
+    }
+
+    function openSprintMenu() {
+        if (!sprintMenu || !sprintTrigger) return;
+        if (sprintGroup.classList.contains('disabled') || sprintSelect.disabled) return;
+
+        sprintSearchQuery = '';
+        renderCustomSprintMenu();
+
+        sprintMenu.classList.add('open');
+        sprintTrigger.classList.add('open');
+        sprintTrigger.setAttribute('aria-expanded', 'true');
+
+        requestAnimationFrame(() => {
+            if (sprintSearchInput) {
+                sprintSearchInput.focus();
+                sprintSearchInput.select();
+            }
+            const selectedIndex = visibleSprintOptionElements.findIndex(el => el.dataset.value === sprintSelect.value);
+            setHighlightedSprintIndex(selectedIndex >= 0 ? selectedIndex : 0);
+        });
+    }
+
+    function handleSprintMenuArrow(delta) {
+        if (!visibleSprintOptionElements.length) return;
+        const current = highlightedSprintIndex < 0 ? 0 : highlightedSprintIndex;
+        const next = Math.min(
+            visibleSprintOptionElements.length - 1,
+            Math.max(0, current + delta)
+        );
+        setHighlightedSprintIndex(next);
+    }
+
+    function renderCustomSprintMenu() {
+        if (!sprintMenu || !sprintSelect) return;
+
+        sprintMenu.innerHTML = '';
+
+        const searchWrap = document.createElement('li');
+        searchWrap.className = 'sprint-menu-search';
+        searchWrap.setAttribute('role', 'presentation');
+
+        const searchInput = document.createElement('input');
+        searchInput.type = 'search';
+        searchInput.className = 'sprint-search-input';
+        searchInput.placeholder = 'Search sprint...';
+        searchInput.value = sprintSearchQuery;
+        searchInput.setAttribute('aria-label', 'Search sprints');
+        searchWrap.appendChild(searchInput);
+        sprintMenu.appendChild(searchWrap);
+
+        const grouped = getGroupedSprintOptions();
+        const selectedSprintId = sprintSelect.value;
+        const fragment = document.createDocumentFragment();
+
+        createSprintSection('Current Sprint', grouped.current, selectedSprintId, fragment);
+        createSprintSection('Recent Sprints', grouped.recent, selectedSprintId, fragment);
+        createSprintSection('Older Sprints', grouped.older, selectedSprintId, fragment);
+
+        if (!fragment.childNodes.length) {
+            const emptyItem = document.createElement('li');
+            emptyItem.className = 'sprint-empty-state';
+            emptyItem.setAttribute('role', 'presentation');
+            emptyItem.textContent = 'No sprints match your search';
+            fragment.appendChild(emptyItem);
+        }
+
+        sprintMenu.appendChild(fragment);
+
+        sprintSearchInput = searchInput;
+        visibleSprintOptionElements = Array.from(sprintMenu.querySelectorAll('.sprint-option[data-value]'));
+        const selectedIndex = visibleSprintOptionElements.findIndex(el => el.dataset.value === selectedSprintId);
+        setHighlightedSprintIndex(selectedIndex, false);
+
+        sprintSearchInput.addEventListener('input', () => {
+            sprintSearchQuery = sprintSearchInput.value;
+            scheduleSprintMenuRender();
+        });
+
+        sprintSearchInput.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                handleSprintMenuArrow(1);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                handleSprintMenuArrow(-1);
+            } else if (event.key === 'Enter') {
+                if (highlightedSprintIndex >= 0 && visibleSprintOptionElements[highlightedSprintIndex]) {
+                    event.preventDefault();
+                    selectSprintValue(visibleSprintOptionElements[highlightedSprintIndex].dataset.value);
+                }
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeSprintMenu(true);
+            }
+        });
+
+        updateSprintTriggerLabel();
+    }
 
     // Fixed Date reference as of Wednesday, July 22, 2026
     const REFERENCE_DATE = new Date('2026-07-22T00:00:00Z');
@@ -63,7 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
             if (sprintArr && Array.isArray(sprintArr)) {
                 sprintArr.forEach(sprintStr => {
                     const idMatch = sprintStr.match(/id=(\d+)/);
-                    const nameMatch = sprintStr.match(/name=([^,\]]+)/);
+                    const nameMatch = sprintStr.match(/name=(.*?)(,[\w]+=|])/);
                     const stateMatch = sprintStr.match(/state=([^,\]]+)/);
                     const startDateMatch = sprintStr.match(/startDate=([^,\]]+)/);
                     const endDateMatch = sprintStr.match(/endDate=([^,\]]+)/);
@@ -80,8 +321,13 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
+        console.log('Sprints Map Size:', sprintsMap.size);
+        console.log('Sprints Map Keys:', Array.from(sprintsMap.keys()).slice(0, 5));
+        console.log('Sprints Map Values:', Array.from(sprintsMap.values()).slice(0, 5));
+
         // Sort Sprints chronologically by ID (larger ID means newer sprint)
         const sortedSprints = Array.from(sprintsMap.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        buildSprintMenuOptions(sortedSprints);
         sortedSprints.forEach(sprint => {
             const opt = document.createElement('option');
             opt.value = sprint.id;
@@ -111,8 +357,62 @@ document.addEventListener('DOMContentLoaded', () => {
             monthSelect.disabled = true;
             monthGroup.classList.add('disabled');
         }
+
+        renderCustomSprintMenu();
     } catch (e) {
         console.error("Error populating filters:", e);
+    }
+
+    if (sprintTrigger && sprintMenu) {
+        ensureSprintSelectorA11y();
+
+        sprintTrigger.addEventListener('click', () => {
+            if (sprintMenu.classList.contains('open')) {
+                closeSprintMenu();
+            } else {
+                openSprintMenu();
+            }
+        });
+
+        sprintTrigger.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ' || event.key === 'ArrowDown') {
+                event.preventDefault();
+                openSprintMenu();
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeSprintMenu(true);
+            }
+        });
+
+        sprintMenu.addEventListener('click', (event) => {
+            const option = event.target.closest('.sprint-option[data-value]');
+            if (!option) return;
+            selectSprintValue(option.dataset.value);
+        });
+
+        sprintMenu.addEventListener('keydown', (event) => {
+            if (event.key === 'ArrowDown') {
+                event.preventDefault();
+                handleSprintMenuArrow(1);
+            } else if (event.key === 'ArrowUp') {
+                event.preventDefault();
+                handleSprintMenuArrow(-1);
+            } else if (event.key === 'Enter') {
+                if (highlightedSprintIndex >= 0 && visibleSprintOptionElements[highlightedSprintIndex]) {
+                    event.preventDefault();
+                    selectSprintValue(visibleSprintOptionElements[highlightedSprintIndex].dataset.value);
+                }
+            } else if (event.key === 'Escape') {
+                event.preventDefault();
+                closeSprintMenu(true);
+            }
+        });
+
+        document.addEventListener('click', (event) => {
+            if (!sprintGroup.contains(event.target)) {
+                closeSprintMenu();
+            }
+        });
     }
 
     // 3. Mutually Exclusive Filter States
@@ -125,6 +425,8 @@ document.addEventListener('DOMContentLoaded', () => {
             monthSelect.disabled = false;
             monthGroup.classList.remove('disabled');
         }
+        updateSprintTriggerLabel();
+        renderCustomSprintMenu();
         updateDashboard();
     });
 
@@ -133,10 +435,13 @@ document.addEventListener('DOMContentLoaded', () => {
             sprintSelect.value = '';
             sprintSelect.disabled = true;
             sprintGroup.classList.add('disabled');
+            closeSprintMenu();
         } else {
             sprintSelect.disabled = false;
             sprintGroup.classList.remove('disabled');
         }
+        updateSprintTriggerLabel();
+        renderCustomSprintMenu();
         updateDashboard();
     });
 

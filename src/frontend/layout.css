@@ -316,6 +316,8 @@ body::after {
   top: calc(100% + 8px);
   right: 0;
   min-width: 260px;
+    max-height: 360px;
+    overflow-y: auto;
   background: #FFFFFF;
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 14px;
@@ -336,6 +338,42 @@ body::after {
   opacity: 1;
   visibility: visible;
   transform: translateY(0);
+}
+
+.sprint-menu-search {
+    position: sticky;
+    top: 0;
+    background: #FFFFFF;
+    padding: 2px 0 8px;
+    margin-bottom: 6px;
+    z-index: 1;
+}
+
+.sprint-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 1px solid #CBD5E1;
+    border-radius: 9px;
+    padding: 8px 10px;
+    font-size: 13px;
+    color: #0F172A;
+    background: #F8FAFC;
+}
+
+.sprint-search-input:focus {
+    outline: none;
+    border-color: var(--accent-cyan);
+    box-shadow: 0 0 0 3px rgba(6, 182, 212, 0.2);
+    background: #FFFFFF;
+}
+
+.sprint-section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #64748B;
+    padding: 8px 10px 4px;
 }
 
 .sprint-option {
@@ -366,6 +404,12 @@ body::after {
 
 .sprint-option:hover i, .sprint-option:hover svg {
   color: var(--accent-cyan);
+}
+
+.sprint-option.is-focused {
+    background: linear-gradient(135deg,
+        rgba(6, 182, 212, 0.12) 0%,
+        rgba(139, 92, 246, 0.12) 100%);
 }
 
 .sprint-option.selected {
@@ -404,6 +448,13 @@ body::after {
 .sprint-option.selected .sprint-tag {
   background: rgba(255, 255, 255, 0.25);
   color: #FFFFFF;
+}
+
+.sprint-empty-state {
+    padding: 12px;
+    color: #64748B;
+    font-size: 13px;
+    text-align: center;
 }
 
 /* Icon-Only Refresh Trigger Button mapping to sync button */
