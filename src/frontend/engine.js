@@ -442,12 +442,12 @@ document.addEventListener('DOMContentLoaded', () => {
                     datasets: [{
                         data: [priorityCounts.High, priorityCounts.Medium, priorityCounts.Low],
                         backgroundColor: ['#ef4444', '#d97706', '#10b981'],
-                        borderWidth: 2, borderColor: '#ffffff'
+                        borderWidth: 2, borderColor: '#111b2d'
                     }]
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false, cutout: '65%',
-                    plugins: { legend: { position: 'right', labels: { color: '#475569', font: { size: 12, weight: '500' }, padding: 15 } } }
+                    plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 12, weight: '500' }, padding: 15 } } }
                 }
             });
         } catch (e) {
