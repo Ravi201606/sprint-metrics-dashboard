@@ -25,6 +25,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Global Chart Instances to prevent overlap/leak
     let priorityChartInstance = null;
+    let workSplitChartInstance = null;
 
     // Fixed Date reference as of Wednesday, July 22, 2026
     const REFERENCE_DATE = new Date('2026-07-22T00:00:00Z');
@@ -173,6 +174,129 @@ document.addEventListener('DOMContentLoaded', () => {
     style.innerHTML = `@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`;
     document.head.appendChild(style);
 
+    function getDeveloperForStory(issue) {
+        if (!issue.changelog || !issue.changelog.histories) {
+            return issue.fields.assignee ? issue.fields.assignee.displayName : null;
+        }
+
+        const allChanges = [];
+        issue.changelog.histories.forEach(h => {
+            h.items.forEach(item => {
+                if (item.field === 'status' || item.field === 'assignee') {
+                    allChanges.push({
+                        field: item.field,
+                        fromString: item.fromString,
+                        toString: item.toString,
+                        to: item.to,
+                        created: new Date(h.created)
+                    });
+                }
+            });
+        });
+        allChanges.sort((a, b) => a.created - b.created);
+
+        let firstInProgressDate = null;
+        for (const change of allChanges) {
+            if (change.field === 'status' && change.toString.toLowerCase().includes('in progress')) {
+                firstInProgressDate = change.created;
+                break;
+            }
+        }
+
+        if (firstInProgressDate) {
+            let lastAssignee = null;
+            for (const change of allChanges) {
+                if (change.created > firstInProgressDate) break;
+                if (change.field === 'assignee') {
+                    lastAssignee = change.toString;
+                }
+            }
+            if (lastAssignee) return lastAssignee;
+        }
+
+        // Fallback logic
+        let firstDoneDate = null;
+        for (const change of allChanges) {
+            if (change.field === 'status' && change.toString.toLowerCase() === 'done') {
+                firstDoneDate = change.created;
+                break;
+            }
+        }
+
+        if (firstDoneDate) {
+            let lastAssigneeBeforeDone = null;
+            for (const change of allChanges) {
+                if (change.created > firstDoneDate) break;
+                if (change.field === 'assignee') {
+                    lastAssigneeBeforeDone = change.toString;
+                }
+            }
+            if (lastAssigneeBeforeDone) return lastAssigneeBeforeDone;
+        }
+        
+        return issue.fields.assignee ? issue.fields.assignee.displayName : null;
+    }
+
+    const processedStories = [];
+
+    function getSprintForDate(date, allSprints) {
+        if (!date) return null;
+        for (const sprint of allSprints) {
+            if (sprint.startDate && sprint.endDate) {
+                const startDate = new Date(sprint.startDate);
+                const endDate = new Date(sprint.endDate);
+                if (date >= startDate && date <= endDate) {
+                    return sprint;
+                }
+            }
+        }
+        return null;
+    }
+
+    // Pre-process all issues to enrich them with developer and sprint attribution
+    try {
+        const allSprintsForLookup = Array.from(sprintsMap.values());
+        const allCompletedStories = issues.filter(i => i.fields.issuetype.name === 'Story' && (i.fields.status.name === 'Done' || i.fields.status.name === 'Closed'));
+
+        allCompletedStories.forEach(story => {
+            const developer = getDeveloperForStory(story);
+            
+            let firstInProgressDate = null;
+            let firstDoneDate = null;
+
+            if (story.changelog && story.changelog.histories) {
+                const statusChanges = [];
+                story.changelog.histories.forEach(h => {
+                    h.items.forEach(item => {
+                        if (item.field === 'status') {
+                            statusChanges.push({
+                                toString: item.toString,
+                                created: new Date(h.created)
+                            });
+                        }
+                    });
+                });
+                statusChanges.sort((a, b) => a.created - b.created);
+                firstInProgressDate = statusChanges.find(c => c.toString.toLowerCase().includes('in progress'))?.created || null;
+                firstDoneDate = statusChanges.find(c => c.toString.toLowerCase() === 'done')?.created || null;
+            }
+
+            const devSprint = getSprintForDate(firstInProgressDate, allSprintsForLookup);
+            const completionSprint = getSprintForDate(firstDoneDate, allSprintsForLookup);
+
+            processedStories.push({
+                ...story,
+                developer: developer,
+                devSprint: devSprint,
+                completionSprint: completionSprint,
+                storyPoints: story.fields.customfield_10016 || 0
+            });
+        });
+    } catch (e) {
+        console.error("Error during story pre-processing:", e);
+    }
+
+
     // 5. Main Dashboard Render Engine
     function updateDashboard() {
         const selectedSprintId = sprintSelect.value;
@@ -180,6 +304,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const selectedSprint = sprintsMap.get(selectedSprintId);
         
         let filteredIssues = issues;
+        let workSplitStories = [];
 
         // Apply mutually exclusive filters
         if (selectedSprintId) {
@@ -191,10 +316,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     return match && match[1] === selectedSprintId;
                 });
             });
+            workSplitStories = processedStories.filter(story => story.devSprint && story.devSprint.id === selectedSprintId);
+
         } else if (selectedMonth) {
             filteredIssues = issues.filter(issue => {
                 return issue.fields.created && issue.fields.created.startsWith(selectedMonth);
             });
+            // Note: Work Split is sprint-based, so it will be empty for month view
         }
 
         const maintenanceIssues = filteredIssues.filter(issue => {
@@ -332,14 +460,14 @@ document.addEventListener('DOMContentLoaded', () => {
         // --- RENDER WIDGET: Average Cycle Time ---
         try {
             let totalCycleTime = 0;
-            let completedIssuesWithCycleTime = 0;
-            const cycleTimeRawData = { compliant: [], nonCompliant: [] }; // Using compliant for issues with cycle time
+            let completedStoriesWithCycleTime = 0;
+            const cycleTimeData = [];
 
-            const issuesForCycleTime = completedIssues.filter(i => i.fields.issuetype.name !== 'Manual Test');
+            const completedStoriesForCycleTime = completedIssues.filter(i => i.fields.issuetype.name === 'Story');
 
-            issuesForCycleTime.forEach(issue => {
+            completedStoriesForCycleTime.forEach(issue => {
                 let firstInProgressDate = null;
-                let doneDate = null;
+                let firstDoneDate = null;
 
                 if (issue.changelog && issue.changelog.histories) {
                     const statusChanges = [];
@@ -360,37 +488,52 @@ document.addEventListener('DOMContentLoaded', () => {
                         if (change.toString.toLowerCase().includes('in progress') && !firstInProgressDate) {
                             firstInProgressDate = change.created;
                         }
-                        if (change.toString.toLowerCase() === 'done') {
-                            doneDate = change.created;
+                        if (change.toString.toLowerCase() === 'done' && !firstDoneDate) {
+                            firstDoneDate = change.created;
                         }
                     }
                 }
 
-                if (firstInProgressDate && doneDate) {
-                    const cycleTime = (doneDate - firstInProgressDate) / (1000 * 60 * 60 * 24); // in days
-                    totalCycleTime += cycleTime;
-                    completedIssuesWithCycleTime++;
-                    cycleTimeRawData.compliant.push({ key: issue.key, summary: issue.fields.summary, cycleTime: cycleTime.toFixed(2) });
+                if (firstInProgressDate && firstDoneDate) {
+                    const cycleTime = (firstDoneDate - firstInProgressDate) / (1000 * 60 * 60 * 24);
+                    if (cycleTime >= 0) {
+                        totalCycleTime += cycleTime;
+                        completedStoriesWithCycleTime++;
+                        cycleTimeData.push({ 
+                            key: issue.key, 
+                            summary: issue.fields.summary, 
+                            inProgressDate: firstInProgressDate.toISOString().split('T')[0],
+                            doneDate: firstDoneDate.toISOString().split('T')[0],
+                            cycleTime: cycleTime.toFixed(2) 
+                        });
+                    }
                 }
             });
 
-            const avgCycleTime = completedIssuesWithCycleTime > 0 ? (totalCycleTime / completedIssuesWithCycleTime).toFixed(2) : 0;
+            const avgCycleTime = completedStoriesWithCycleTime > 0 ? (totalCycleTime / completedStoriesWithCycleTime).toFixed(2) : 0;
             document.getElementById('cycle-time-value').textContent = `${avgCycleTime} days`;
-            document.getElementById('cycle-time-sub').textContent = `Total: ${totalCycleTime.toFixed(0)}d / ${completedIssuesWithCycleTime} items`;
+            document.getElementById('cycle-time-sub').textContent = `Total: ${totalCycleTime.toFixed(0)}d / ${completedStoriesWithCycleTime} stories`;
 
             const cycleTimeBtn = document.querySelector('button[data-metric="cycle-time"]');
             cycleTimeBtn.onclick = () => {
-                // Custom modal for cycle time
-                modalTitle.textContent = 'Cycle Time per Issue';
+                modalTitle.textContent = 'Cycle Time per Story';
                 modalBody.style.gridTemplateColumns = '1fr';
                 nonCompliantList.parentElement.style.display = 'none';
-                compliantList.parentElement.querySelector('h3').textContent = 'Completed Issues';
-                compliantList.innerHTML = '';
-                cycleTimeRawData.compliant.forEach(item => {
-                    const li = document.createElement('li');
-                    li.innerHTML = `<a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a>: ${item.summary} - <strong>${item.cycleTime} days</strong>`;
-                    compliantList.appendChild(li);
+                compliantList.parentElement.querySelector('h3').textContent = 'Completed Stories';
+                
+                let tableHtml = `<table class="dev-table"><thead><tr><th>Issue</th><th>In Progress Date</th><th>Done Date</th><th>Cycle Time (days)</th></tr></thead><tbody>`;
+                cycleTimeData.forEach(item => {
+                    const summary = item.summary ? (item.summary.length > 60 ? item.summary.substring(0, 57) + '...' : item.summary) : '';
+                    tableHtml += `<tr>
+                        <td><a href="https://jira.worldline-solutions.com/browse/${item.key}" target="_blank">${item.key}</a><br><small>${summary}</small></td>
+                        <td>${item.inProgressDate}</td>
+                        <td>${item.doneDate}</td>
+                        <td><strong>${item.cycleTime}</strong></td>
+                    </tr>`;
                 });
+                tableHtml += `</tbody></table>`;
+                compliantList.innerHTML = tableHtml;
+
                 modal.style.display = 'block';
             };
 
@@ -422,6 +565,134 @@ document.addEventListener('DOMContentLoaded', () => {
         } catch (e) {
             console.error("Error rendering Sprint Progress widget:", e);
             sprintProgressValue.textContent = `Error`;
+        }
+
+        // --- RENDER CHART: Work Split by Developer (%) ---
+        try {
+            const devWork = {};
+            workSplitStories.forEach(story => {
+                const devName = story.developer;
+                if (!devName) return;
+
+                if (!devWork[devName]) {
+                    devWork[devName] = { storyPoints: 0, storyCount: 0, issues: [] };
+                }
+                devWork[devName].storyPoints += story.storyPoints;
+                devWork[devName].storyCount++;
+                devWork[devName].issues.push(story);
+            });
+
+            const totalStoryPoints = Object.values(devWork).reduce((sum, dev) => sum + dev.storyPoints, 0);
+            const totalStories = workSplitStories.length;
+            const useStoryPoints = totalStoryPoints > 0;
+
+            const workSplitData = Object.entries(devWork).map(([developer, data]) => {
+                const percentage = useStoryPoints 
+                    ? (totalStoryPoints > 0 ? (data.storyPoints / totalStoryPoints) * 100 : 0)
+                    : (totalStories > 0 ? (data.storyCount / totalStories) * 100 : 0);
+                return { developer, ...data, percentage };
+            });
+
+            workSplitData.sort((a, b) => b.percentage - a.percentage);
+
+            const insightEl = document.getElementById('work-split-insight');
+            if (workSplitData.length > 0) {
+                const topContributorPercentage = workSplitData[0].percentage;
+                if (topContributorPercentage > 45) {
+                    insightEl.textContent = 'High workload concentration on one developer.';
+                } else if (topContributorPercentage > 30) {
+                    insightEl.textContent = 'Moderate imbalance detected.';
+                } else {
+                    insightEl.textContent = 'Work distribution is balanced.';
+                }
+            } else {
+                insightEl.textContent = 'No development work started in this sprint.';
+            }
+
+            if (workSplitChartInstance) workSplitChartInstance.destroy();
+            const ctxWorkSplit = document.getElementById('work-split-chart').getContext('2d');
+            workSplitChartInstance = new Chart(ctxWorkSplit, {
+                type: 'bar',
+                data: {
+                    labels: workSplitData.map(d => d.developer),
+                    datasets: [{
+                        label: 'Work Split %',
+                        data: workSplitData.map(d => d.percentage),
+                        backgroundColor: '#10b981',
+                        borderColor: '#064e3b',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    indexAxis: 'y',
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: function(context) {
+                                    const devData = workSplitData[context.dataIndex];
+                                    const value = useStoryPoints ? `${devData.storyPoints} SP` : `${devData.storyCount} stories`;
+                                    return `${devData.percentage.toFixed(1)}% (${value})`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            beginAtZero: true,
+                            max: 100,
+                            ticks: {
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            const workSplitBtn = document.querySelector('button[data-metric="work-split"]');
+            workSplitBtn.onclick = () => {
+                modalTitle.textContent = 'Work Split by Developer';
+                modalBody.style.gridTemplateColumns = '1fr';
+                nonCompliantList.parentElement.style.display = 'none';
+                compliantList.parentElement.querySelector('h3').textContent = 'Sprint Contribution Details';
+
+                let tableHtml = `<table class="dev-table"><thead><tr><th>Developer</th><th>Completed Stories</th>`;
+                if (useStoryPoints) {
+                    tableHtml += `<th>Story Points</th>`;
+                }
+                tableHtml += `<th>% of Work</th><th>Issue & Summary</th><th>Dev Sprint</th><th>Completion Sprint</th></tr></thead><tbody>`;
+
+                workSplitData.forEach(dev => {
+                    const issueDetails = dev.issues.map(i => `
+                        <div>
+                            <a href="https://jira.worldline-solutions.com/browse/${i.key}" target="_blank">${i.key}</a>
+                            <small>${i.fields.summary ? (i.fields.summary.length > 60 ? i.fields.summary.substring(0,57)+'...' : i.fields.summary) : ''}</small>
+                        </div>`).join('');
+
+                    tableHtml += `<tr>
+                        <td><strong>${dev.developer}</strong></td>
+                        <td>${dev.storyCount}</td>`;
+                    if (useStoryPoints) {
+                        tableHtml += `<td>${dev.storyPoints}</td>`;
+                    }
+                    tableHtml += `<td>${dev.percentage.toFixed(1)}%</td>
+                        <td class="issue-cell">${issueDetails}</td>
+                        <td>${dev.issues.map(i => i.devSprint?.name || 'N/A').join(', ')}</td>
+                        <td>${dev.issues.map(i => i.completionSprint?.name || 'N/A').join(', ')}</td>
+                    </tr>`;
+                });
+                tableHtml += `</tbody></table>`;
+                compliantList.innerHTML = tableHtml;
+
+                modal.style.display = 'block';
+            };
+
+        } catch (e) {
+            console.error("Error rendering Work Split chart:", e);
         }
 
         // --- RENDER CHART: Issue Distribution by Priority ---
