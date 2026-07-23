@@ -1,0 +1,219 @@
+require('dotenv').config();
+const https = require('https');
+const { initializeDatabase, saveDatabase, getDb, getStatements } = require('./db.js');
+
+// --- Configuration ---
+const JIRA_BASE_URL = process.env.JIRA_BASE_URL;
+const JIRA_API_TOKEN = process.env.JIRA_API_TOKEN;
+const JQL = 'project = ODCNG AND "Affect Team" = "Sahyadri Dev Team" ORDER BY updated DESC';
+const PAGE_SIZE = 50;
+const DISCOVERY_PAGE_LIMIT = 20; // Max pages to scan during discovery
+const SCOPE_KEY = `ODCNG::Sahyadri Dev Team`;
+const JIRA_FIELDS = ['summary', 'status', 'issuetype', 'assignee', 'priority', 'created', 'updated', 'resolutiondate', 'project', 'worklog', 'customfield_12041', 'resolution'];
+
+const options = { headers: { 'Authorization': `Bearer ${JIRA_API_TOKEN}`, 'Content-Type': 'application/json' } };
+
+function buildGlobalSprintMap(allIssues) {
+    const sprintNameMap = {};
+    const sprintNameRegex = /name=([^,]+)/;
+    const sprintIdRegex = /id=(\d+)/;
+    const sprintEndDateRegex = /endDate=([^,\]]+)/;
+    const sprintStartDateRegex = /startDate=([^,\]]+)/;
+    const sprintCompleteDateRegex = /completeDate=([^,\]]+)/;
+    const sprintStateRegex = /state=([^,\]]+)/;
+
+    for (const issue of allIssues) {
+        if (issue && issue.fields && issue.fields.customfield_12041) {
+            issue.fields.customfield_12041.forEach(sprintString => {
+                const idMatch = sprintString.match(sprintIdRegex);
+                const nameMatch = sprintString.match(sprintNameRegex);
+                const endDateMatch = sprintString.match(sprintEndDateRegex);
+                const startDateMatch = sprintString.match(sprintStartDateRegex);
+                const completeDateMatch = sprintString.match(sprintCompleteDateRegex);
+                const stateMatch = sprintString.match(sprintStateRegex);
+                if (idMatch && nameMatch) {
+                    sprintNameMap[idMatch[1]] = {
+                        name: nameMatch[1],
+                        endDate: endDateMatch ? endDateMatch[1] : null,
+                        startDate: startDateMatch ? startDateMatch[1] : null,
+                        completeDate: completeDateMatch ? completeDateMatch[1] : null,
+                        state: stateMatch ? stateMatch[1] : null,
+                    };
+                }
+            });
+        }
+    }
+    return sprintNameMap;
+}
+
+const processPage = (issues, isDiscovery, sprintNameMap) => {
+    const db = getDb();
+    try {
+        db.exec('BEGIN');
+        for (const issue of issues) {
+            processIssue(issue, isDiscovery, sprintNameMap);
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        console.error(`Error processing page, rolling back transaction:`, err.message);
+        db.exec('ROLLBACK');
+    }
+};
+
+const processIssue = (issue, isDiscovery, sprintNameMap) => {
+    const { upsertIssue, upsertWorklog, insertStatusTransition, insertIssueSprint, deleteIssueSprints } = getStatements();
+    
+    upsertIssue.run(
+        issue.key,
+        issue.fields.summary,
+        issue.fields.status.name,
+        issue.fields.issuetype.name,
+        issue.fields.assignee ? issue.fields.assignee.displayName : null,
+        issue.fields.priority ? issue.fields.priority.name : null,
+        issue.fields.created,
+        issue.fields.updated,
+        issue.fields.resolutiondate,
+        issue.fields.project.key,
+        JSON.stringify(issue.fields)
+    );
+    
+    if (issue.fields.worklog && issue.fields.worklog.worklogs) {
+        issue.fields.worklog.worklogs.forEach(w => upsertWorklog.run(w.id, issue.key, w.author ? w.author.displayName : 'Unknown', w.started, w.timeSpentSeconds, w.comment));
+    }
+
+    const changelogEvents = [];
+    if (issue.changelog && issue.changelog.histories) {
+        issue.changelog.histories.forEach(h => {
+            h.items.forEach(item => {
+                if (item.field === 'Sprint') {
+                    changelogEvents.push({ type: 'sprint', created: new Date(h.created), from: item.from, to: item.to, fromString: item.fromString, toString: item.toString });
+                } else if (item.field === 'status' && (item.toString === 'Done' || item.toString === 'Closed')) {
+                    changelogEvents.push({ type: 'completion', created: new Date(h.created) });
+                }
+                if (item.field === 'status') {
+                    insertStatusTransition.run(issue.key, item.fromString, item.toString, h.created);
+                }
+            });
+        });
+    }
+    changelogEvents.sort((a, b) => a.created - b.created);
+
+    const currentSprintIds = (issue.fields.customfield_12041 || []).map(s => s.match(/id=(\d+)/)?.[1]).filter(Boolean);
+    const sprintsFoundInChangelog = new Set();
+    let wasRemoved = false;
+    let removedDate = null;
+    let removedEvent = null;
+    
+    for (const event of changelogEvents) {
+        if (event.type !== 'sprint') continue;
+        const oldIds = new Set(event.from ? event.from.split(',').map(s => s.trim()) : []);
+        const newIds = new Set(event.to ? event.to.split(',').map(s => s.trim()) : []);
+        
+        const added = [...newIds].filter(id => !oldIds.has(id));
+        const removed = [...oldIds].filter(id => !newIds.has(id));
+        
+        added.forEach(id => sprintsFoundInChangelog.add(id));
+        if (removed.length > 0) {
+            wasRemoved = true;
+            removedDate = event.created;
+            removedEvent = event;
+        }
+    }
+
+    const completionEvent = changelogEvents.find(e => e.type === 'completion');
+
+    if (isDiscovery) {
+        const fallbackSprints = currentSprintIds.filter(id => !sprintsFoundInChangelog.has(id));
+        if (!foundCases.case1_fallback && fallbackSprints.length > 0) {
+            console.log(`\n--- DISCOVERY CASE 1: Fallback Applied ---`);
+            console.log(`Issue: ${issue.key} (Created: ${issue.fields.created})`);
+            console.log(`Current Sprints in customfield_12041: [${currentSprintIds.join(', ')}]`);
+            console.log(`Sprints with Add Event in Changelog: [${[...sprintsFoundInChangelog].join(', ')}]`);
+            console.log(`Fallback Applied for Sprint IDs: [${fallbackSprints.join(', ')}]. Their 'added_at' would be inferred from the issue's created date.`);
+            foundCases.case1_fallback = true;
+        }
+
+        if (!foundCases.case2_removed && wasRemoved) {
+            console.log(`\n--- DISCOVERY CASE 2: Sprint Removed ---`);
+            console.log(`Issue: ${issue.key}`);
+            console.log(`Removal detected on: ${removedDate}`);
+            console.log(`Changelog event: From: "${removedEvent.fromString}", To: "${removedEvent.toString}"`);
+            foundCases.case2_removed = true;
+        }
+
+        if (!foundCases.case3_completed_outside && wasRemoved && completionEvent && completionEvent.created > removedDate) {
+            console.log(`\n--- DISCOVERY CASE 3: Completed Outside Sprint ---`);
+            console.log(`Issue: ${issue.key}`);
+            console.log(`A sprint was removed on: ${removedDate}`);
+            console.log(`Issue was completed on: ${completionEvent.created}`);
+            foundCases.case3_completed_outside = true;
+        }
+    }
+};
+
+const fetchAllIssues = async () => {
+    let allIssues = [];
+    let page = 0;
+    let total = 0;
+    do {
+        const url = `${JIRA_BASE_URL}/rest/api/2/search?jql=${encodeURIComponent(JQL)}&startAt=${page * PAGE_SIZE}&maxResults=${PAGE_SIZE}&fields=${JIRA_FIELDS.join(',')}&expand=changelog`;
+        try {
+            const data = await new Promise((resolve, reject) => https.get(url, options, res => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => res.statusCode === 200 ? resolve(JSON.parse(d)) : reject(new Error(`HTTP ${res.statusCode}`)));
+            }).on('error', reject));
+
+            if (!data.issues || data.issues.length === 0) {
+                break;
+            }
+            allIssues = allIssues.concat(data.issues);
+            total = data.total;
+        } catch (err) {
+            console.error(`Failed to fetch page ${page + 1}:`, err);
+        }
+        page++;
+    } while (page * PAGE_SIZE < total);
+    return allIssues;
+}
+
+const fetchIssuesForDiscovery = async () => {
+    console.log('Starting Discovery Pass...');
+    const allIssues = await fetchAllIssues();
+    const sprintNameMap = buildGlobalSprintMap(allIssues);
+    
+    let page = 0;
+    while (page < DISCOVERY_PAGE_LIMIT) {
+        if (Object.values(foundCases).every(Boolean)) {
+            console.log("\nAll discovery cases found!");
+            break;
+        }
+        console.log(`\nScanning page ${page + 1}...`);
+        const startAt = page * PAGE_SIZE;
+        const issues = allIssues.slice(startAt, startAt + PAGE_SIZE);
+        if (issues.length === 0) {
+            console.log("No more issues to scan.");
+            break;
+        }
+        processPage(issues, true, sprintNameMap);
+        page++;
+    }
+    if (!Object.values(foundCases).every(Boolean)) {
+        console.log("\nDiscovery pass finished. Found cases:");
+        console.log(`- Fallback Applied: ${foundCases.case1_fallback}`);
+        console.log(`- Sprint Removed: ${foundCases.case2_removed}`);
+        console.log(`- Completed Outside Sprint: ${foundCases.case3_completed_outside}`);
+    }
+};
+
+(async () => {
+    if (process.env.DISCOVERY_ONLY === 'true') {
+        await initializeDatabase();
+        await fetchIssuesForDiscovery();
+    } else {
+        // Full harvest logic will be added later
+    }
+})().catch(err => {
+    console.error("Operation failed:", err);
+    process.exit(1);
+});
