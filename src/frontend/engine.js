@@ -712,13 +712,13 @@ document.addEventListener('DOMContentLoaded', () => {
                     labels: ['High', 'Medium', 'Low'],
                     datasets: [{
                         data: [priorityCounts.High, priorityCounts.Medium, priorityCounts.Low],
-                        backgroundColor: ['#ef4444', '#d97706', '#10b981'],
-                        borderWidth: 2, borderColor: '#111b2d'
+                        backgroundColor: ['#dc2626', '#f59e0b', '#10b981'],
+                        borderWidth: 2, borderColor: '#ffffff'
                     }]
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false, cutout: '65%',
-                    plugins: { legend: { position: 'right', labels: { color: '#94a3b8', font: { size: 12, weight: '500' }, padding: 15 } } }
+                    plugins: { legend: { position: 'right', labels: { color: '#334155', font: { size: 12, weight: '600' }, padding: 15 } } }
                 }
             });
         } catch (e) {

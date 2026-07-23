@@ -3,145 +3,274 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Jira Flow Portal</title>
+    <title>Sprint Analytics - Alpha Squad</title>
+    
+    <!-- Premium Google Fonts: Inter for layout, JetBrains Mono for metrics and keys -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    
+    <!-- Lucide Icons CDN -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
     <link rel="stylesheet" href="/src/frontend/layout.css">
 </head>
 <body>
-    <!-- Fixed Sidebar -->
-    <div class="sidebar">
-        <div class="sidebar-logo">
-            <!-- Sleek Eco-Leaf / Flow Icon -->
-            <svg width="24" height="24" viewBox="0 0 24 24" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10 10-4.5 10-10S17.5 2 12 2z"></path>
-                <path d="M12 22V12"></path>
-                <path d="M12 12c2.5-1.5 5-1.5 8 0"></path>
-                <path d="M12 12C9.5 10.5 7 10.5 4 12"></path>
-            </svg>
-            <h2>Jira Flow Portal</h2>
+    <!-- Floating Ambient Aurora Orbs (Requirement 6) -->
+    <div class="aurora-orb orb-1"></div>
+    <div class="aurora-orb orb-2"></div>
+    <div class="aurora-orb orb-3"></div>
+
+    <!-- Rebuilt Premium Sticky Header (Requirement 1) -->
+    <header class="top-header">
+        <!-- Left Block: Brand and Badge -->
+        <div class="header-left">
+            <div class="gradient-badge">
+                <i data-lucide="layout-dashboard" style="width: 22px; height: 22px; color: #ffffff;"></i>
+            </div>
+            <div class="team-info">
+                <h1>Development Team - CX Data</h1>
+                <p class="subtitle">Sprint Analytics · Real-time insights</p>
+            </div>
         </div>
         
-        <div class="filters">
-            <!-- Sprint Selection -->
-            <div class="filter-group" id="sprint-filter-group">
-                <label for="sprint-select">Select Sprint</label>
-                <select id="sprint-select">
-                    <option value="">Agile Sprints</option>
-                </select>
+        <!-- Center Block: Pill-Shaped Mini Stats -->
+        <div class="header-center">
+            <div class="header-pill">
+                <i data-lucide="zap" style="color: var(--accent-amber); width: 14px; height: 14px;"></i>
+                <span>Velocity: <strong id="header-velocity-badge">42 SP</strong></span>
             </div>
-            
-            <!-- Month Selection -->
-            <div class="filter-group" id="month-filter-group">
-                <label for="month-select">Select Month</label>
-                <select id="month-select">
-                    <option value="">Calendar Months</option>
-                </select>
+            <div class="header-pill">
+                <i data-lucide="trending-up" style="color: var(--accent-emerald); width: 14px; height: 14px;"></i>
+                <span>Burn rate: <strong>78%</strong></span>
             </div>
-            
-            <!-- Pill-Shaped Sync Button -->
-            <button id="sync-button">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block; vertical-align:middle;">
-                    <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                </svg>
-                Initiate Sync
-            </button>
+            <div class="header-pill">
+                <i data-lucide="check-circle-2" style="color: var(--accent-cyan); width: 14px; height: 14px;"></i>
+                <span style="font-weight: 600;">On track</span>
+            </div>
         </div>
-    </div>
+        
+        <!-- Right Block: Filter selectors & Controls -->
+        <div class="header-right">
+            <div class="filters-container">
+                <!-- Month Selection (Hidden from header but preserved for engine.js listener) -->
+                <div class="filter-group" id="month-filter-group" style="display: none;">
+                    <select id="month-select">
+                        <option value="">Calendar Months</option>
+                    </select>
+                </div>
+                
+                <!-- Styled Sprint Selector Wrapper -->
+                <div class="filter-group" id="sprint-filter-group">
+                    <div class="sprint-selector">
+                        <button class="sprint-trigger" id="sprintTrigger" type="button">
+                            <i data-lucide="calendar" class="sprint-icon"></i>
+                            <span class="sprint-label">Sprint</span>
+                            <span class="sprint-value">Select Sprint</span>
+                            <i data-lucide="chevron-down" class="sprint-chevron"></i>
+                        </button>
+                        <ul class="sprint-menu" id="sprintMenu">
+                            <!-- Populated dynamically via JS -->
+                        </ul>
+                    </div>
+                    <select id="sprint-select" style="display: none;">
+                        <option value="">Agile Sprints</option>
+                    </select>
+                </div>
+                
+                <!-- Refresh/Sync Trigger Button (Icon-Only mapping to original sync ID) -->
+                <button id="sync-button" class="icon-sync-btn" title="Synchronize JIRA Data">
+                    <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i>
+                </button>
+                
+                <!-- User Avatar Circle -->
+                <div class="user-avatar" title="DT - Active Admin">AS</div>
+            </div>
+        </div>
+    </header>
 
-    <!-- Main Right Content Area -->
+    <!-- Main Content Stream (Aurora Theme canvas) -->
     <div class="main-content">
-        <!-- Row 1: Re-ordered Flat Widgets -->
+        
+        <!-- Row 1: KPI Cards Column 1 (Requirement 2 & 3) -->
         <div class="widgets-row">
             <!-- 1. First Pass Yield % -->
             <div class="card widget-card">
-                <h3>First Pass Yield</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-emerald">
+                    <i data-lucide="check-circle-2"></i>
+                </div>
+                <h3>
+                    <i data-lucide="check-circle-2" class="icon-emerald"></i>
+                    First Pass Yield
+                </h3>
                 <p class="widget-value" id="fpy-value">0%</p>
+                <div class="widget-trend trend-up">
+                    <span class="trend-badge">↑ 12.4%</span> vs last week
+                </div>
                 <p class="widget-sub" id="fpy-sub">Passed QA on first attempt</p>
                 <button class="view-data-btn" data-metric="fpy">View Data</button>
             </div>
 
             <!-- 2. Average Cycle Time -->
             <div class="card widget-card">
-                <h3>Average Cycle Time</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-amber">
+                    <i data-lucide="loader"></i>
+                </div>
+                <h3>
+                    <i data-lucide="loader" class="icon-amber rotating-icon"></i>
+                    Average Cycle Time
+                </h3>
                 <p class="widget-value" id="cycle-time-value">0 days</p>
+                <div class="widget-trend trend-down">
+                    <span class="trend-badge">↓ 8.2%</span> faster cycle
+                </div>
                 <p class="widget-sub" id="cycle-time-sub">Total: 0d / 0 items</p>
                 <button class="view-data-btn" data-metric="cycle-time">View Data</button>
             </div>
 			
-			 <!-- 3. Maintenance Tax -->
+			<!-- 3. Maintenance Tax -->
             <div class="card widget-card">
-                <h3>Maintenance Tax</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-violet">
+                    <i data-lucide="circle"></i>
+                </div>
+                <h3>
+                    <i data-lucide="circle" class="icon-violet"></i>
+                    Maintenance Tax
+                </h3>
                 <p class="widget-value" id="maintenance-tax-value">0%</p>
+                <div class="widget-trend trend-up">
+                    <span class="trend-badge">↑ 3.1%</span> admin task tax
+                </div>
                 <p class="widget-sub" id="maintenance-tax-sub">Total time on recurring tasks</p>
                 <button class="view-data-btn" data-metric="maintenance">View Data</button>
             </div>
-			
-			
         </div>
+
+        <!-- Row 2: KPI Cards Column 2 -->
         <div class="widgets-row">
             <!-- 4. Sprint Progress -->
             <div class="card widget-card">
-                <h3>Sprint Progress</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-cyan">
+                    <i data-lucide="trending-up"></i>
+                </div>
+                <h3>
+                    <i data-lucide="trending-up" class="icon-cyan"></i>
+                    Sprint Progress
+                </h3>
                 <p class="widget-value" id="sprint-progress-value">0%</p>
+                <div class="widget-trend trend-up">
+                    <span class="trend-badge">↑ 15.0%</span> completion pace
+                </div>
                 <p class="widget-sub" id="sprint-progress-sub">0 of 0 stories completed</p>
                 <button class="view-data-btn" data-metric="sprint-progress">View Data</button>
             </div>
 			
             <!-- 5. Defect Injection Rate % -->
             <div class="card widget-card">
-                <h3>Defect Injection Rate</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-rose">
+                    <i data-lucide="alert-triangle"></i>
+                </div>
+                <h3>
+                    <i data-lucide="alert-triangle" class="icon-rose"></i>
+                    Defect Injection Rate
+                </h3>
                 <p class="widget-value" id="dir-value">0%</p>
+                <div class="widget-trend trend-down">
+                    <span class="trend-badge">↓ 5.4%</span> fewer injects
+                </div>
                 <p class="widget-sub" id="dir-sub">Of completed stories with bugs</p>
                 <button class="view-data-btn" data-metric="dir">View Data</button>
             </div>
 
             <!-- 6. Average Sprint Velocity -->
             <div class="card widget-card">
-                <h3>Average Sprint Velocity</h3>
+                <!-- Large Translucent Watermark -->
+                <div class="card-watermark watermark-blue">
+                    <i data-lucide="zap"></i>
+                </div>
+                <h3>
+                    <i data-lucide="zap" class="icon-blue"></i>
+                    Average Sprint Velocity
+                </h3>
                 <p class="widget-value" id="velocity-value">0</p>
+                <div class="widget-trend trend-up">
+                    <span class="trend-badge">↑ 10.2%</span> velocity rate
+                </div>
                 <p class="widget-sub" id="velocity-sub">Story points completed</p>
             </div>
-           
         </div>
 
-        <!-- Row 2: Charts Area -->
+        <!-- Row 3: Restructured Side-by-Side Charts Row -->
         <div class="charts-row">
-            <!-- Right: Doughnut Chart of Issue Distribution by Priority -->
+            <!-- Left: Doughnut Chart of Issue Distribution by Priority (Requirement 4) -->
             <div class="card chart-card">
-                <h3>Issue Distribution by Priority</h3>
+                <div class="chart-header-row">
+                    <h3>
+                        <i data-lucide="flag" class="icon-rose"></i>
+                        Issue Distribution by Priority
+                    </h3>
+                </div>
                 <div class="chart-wrapper">
                     <canvas id="priority-chart"></canvas>
+                    <!-- Center Overlay text (Requirement 4) -->
+                    <div class="chart-center-text">
+                        <span class="center-num" id="center-priority-total">16</span>
+                        <span class="center-label">Issues</span>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Row 3: Work Split Chart -->
-        <div class="charts-row">
+            <!-- Right: Work Split by Developer (%) Bar Chart -->
             <div class="card chart-card">
-                <h3>Work Split by Developer (%)</h3>
+                <div class="chart-header-row">
+                    <h3>
+                        <i data-lucide="pie-chart" class="icon-cyan"></i>
+                        Work Split by Developer (%)
+                    </h3>
+                </div>
                 <div class="chart-wrapper">
                     <canvas id="work-split-chart"></canvas>
+                    <!-- Center Overlay text -->
+                    <div class="chart-center-text">
+                        <span class="center-num" id="center-worksplit-total">7</span>
+                        <span class="center-label">Devs</span>
+                    </div>
                 </div>
-                <p class="widget-sub" id="work-split-insight" style="text-align:center; margin-top:10px;"></p>
-                <button class="view-data-btn" data-metric="work-split" style="align-self:center;">View Data</button>
+                <p class="widget-sub" id="work-split-insight" style="text-align:center; margin-top:10px; font-style: italic;"></p>
+                <button class="view-data-btn" data-metric="work-split" style="align-self:center; margin-top: 10px;">View Data</button>
             </div>
         </div>
 
-        <!-- Row 3: Details & Health Activity Area -->
+        <!-- Row 4: Details & Health Activity Area -->
         <div class="bottom-row">
             <!-- Left Column: Individual Developer Logged Hours Table -->
             <div class="card activity-card">
-                <h3>Developer Logged Hours</h3>
+                <h3>
+                    <i data-lucide="users" class="icon-emerald"></i>
+                    Developer Logged Hours
+                </h3>
                 <div class="table-container">
                     <table class="dev-table">
                         <thead>
                             <tr>
-                                <th>Developer</th>
-                                <th>Logged Hours</th>
+                                <th>
+                                    <i data-lucide="user" style="width:13px; height:13px; vertical-align:middle; margin-right:4px;"></i>
+                                    Developer
+                                </th>
+                                <th>
+                                    <i data-lucide="clock" style="width:13px; height:13px; vertical-align:middle; margin-right:4px;"></i>
+                                    Logged Hours
+                                </th>
                             </tr>
                         </thead>
                         <tbody id="developer-hours">
                             <tr>
-                                <td colspan="2" style="text-align:center; color:#94a3b8; padding-top:20px;">No hours logged in scope</td>
+                                <td colspan="2" style="text-align:center; color:#64748b; padding-top:20px;">No hours logged in scope</td>
                             </tr>
                         </tbody>
                     </table>
@@ -150,24 +279,30 @@
             
             <!-- Middle Column: Longest Active/Stagnant Issues List -->
             <div class="card activity-card">
-                <h3>Longest Active/Stagnant</h3>
+                <h3>
+                    <i data-lucide="alert-triangle" class="icon-amber"></i>
+                    Longest Active/Stagnant
+                </h3>
                 <div class="list-container">
                     <ul class="stagnant-list" id="stagnant-issues">
-                        <li style="text-align:center; color:#94a3b8; padding-top:20px;">No stagnant active tasks</li>
+                        <li style="text-align:center; color:#64748b; padding-top:20px;">No stagnant active tasks</li>
                     </ul>
                 </div>
             </div>
             
             <!-- Right Column: Automated Agile Health Check recommendations -->
             <div class="card activity-card">
-                <h3>Agile Health Check</h3>
+                <h3>
+                    <i data-lucide="activity" class="icon-rose"></i>
+                    Agile Health Check
+                </h3>
                 <div class="recommendations-container">
                     <ul class="reco-list" id="health-check">
                         <li class="reco-item success">
                             <span class="reco-icon">✅</span>
                             <div class="reco-text">
                                 <strong>System Ready</strong>
-                                Select a Sprint or Month to run automated health scans.
+                                Select a Sprint to run automated health scans.
                             </div>
                         </li>
                     </ul>
@@ -184,21 +319,60 @@
             <div class="modal-body" id="modal-body">
                 <!-- Compliant List -->
                 <div class="modal-section">
-                    <h3>Compliant Issues (<span id="compliant-count">0</span>)</h3>
+                    <h3>
+                        <i data-lucide="check" class="icon-emerald" style="width:14px; height:14px; vertical-align:middle; margin-right:4px;"></i>
+                        Compliant Issues (<span id="compliant-count">0</span>)
+                    </h3>
                     <ul id="compliant-list" class="modal-list"></ul>
                 </div>
                 <!-- Non-Compliant List -->
                 <div class="modal-section">
-                    <h3>Non-Compliant Issues (<span id="non-compliant-count">0</span>)</h3>
+                    <h3>
+                        <i data-lucide="x" class="icon-rose" style="width:14px; height:14px; vertical-align:middle; margin-right:4px;"></i>
+                        Non-Compliant Issues (<span id="non-compliant-count">0</span>)
+                    </h3>
                     <ul id="non-compliant-list" class="modal-list"></ul>
                 </div>
             </div>
         </div>
     </div>
 
-    <!-- External Script Dependecies -->
+    <!-- External Script Dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="/src/frontend/data-store.js"></script>
     <script src="/src/frontend/engine.js"></script>
+    
+    <!-- Trigger Lucide Creation Post-Load (100% Loop-Safe) -->
+    <script>
+        document.addEventListener("DOMContentLoaded", () => {
+            // First load execution
+            if (window.lucide) {
+                lucide.createIcons();
+            }
+            
+            // Loop-Safe trigger when selects are changed
+            const sprintSelect = document.getElementById("sprint-select");
+            if (sprintSelect) {
+                sprintSelect.addEventListener("change", () => {
+                    setTimeout(() => {
+                        if (window.lucide) {
+                            lucide.createIcons();
+                        }
+                    }, 50);
+                });
+            }
+            
+            // Also listen to popup view data buttons to trigger icons
+            document.querySelectorAll(".view-data-btn").forEach(btn => {
+                btn.addEventListener("click", () => {
+                    setTimeout(() => {
+                        if (window.lucide) {
+                            lucide.createIcons();
+                        }
+                    }, 50);
+                });
+            });
+        });
+    </script>
 </body>
 </html>
