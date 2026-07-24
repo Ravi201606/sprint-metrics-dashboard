@@ -1,2 +1,0 @@
-// Retired: dashboard data now loads from GET /api/issues.
-// This placeholder file is intentionally left empty for compatibility.

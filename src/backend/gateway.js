@@ -4,8 +4,8 @@ const path = require('path');
 const { spawn } = require('child_process');
 const { initializeDatabase, getDb } = require('./db.js');
 
-const PORT = 9000;
-const FALLBACK_PORT = 9090;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 9000;
+const FALLBACK_PORT = process.env.FALLBACK_PORT ? parseInt(process.env.FALLBACK_PORT, 10) : 9090;
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const DB_FILE_PATH = path.join(PROJECT_ROOT, 'database', 'metrics.db');
 

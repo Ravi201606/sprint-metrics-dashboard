@@ -809,17 +809,20 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        const delta = prevValue === 0
-            ? (currentValue > 0 ? 100 : 0)
-            : ((currentValue - prevValue) / Math.abs(prevValue)) * 100;
+        const isNew = prevValue === 0 && currentValue > 0;
+        const delta = isNew ? 0 : (prevValue === 0 ? 0 : ((currentValue - prevValue) / Math.abs(prevValue)) * 100);
 
-        const improved = higherIsBetter ? delta >= 0 : delta <= 0;
+        const improved = isNew ? higherIsBetter : (higherIsBetter ? delta >= 0 : delta <= 0);
         trendEl.classList.toggle('trend-up', improved);
         trendEl.classList.toggle('trend-down', !improved);
         trendEl.style.visibility = 'visible';
         if (badgeEl) {
-            const arrow = delta >= 0 ? '↑' : '↓';
-            badgeEl.textContent = `${arrow} ${Math.abs(delta).toFixed(1)}%`;
+            if (isNew) {
+                badgeEl.textContent = 'New';
+            } else {
+                const arrow = delta >= 0 ? '↑' : '↓';
+                badgeEl.textContent = `${arrow} ${Math.abs(delta).toFixed(1)}%`;
+            }
         }
     }
 
@@ -846,11 +849,14 @@ document.addEventListener('DOMContentLoaded', () => {
             });
         }
 
+        // Globally exclude issue type Manual Test
+        filteredIssues = filteredIssues.filter(issue => issue.fields.issuetype.name !== 'Manual Test');
+
         const maintenanceIssues = filteredIssues.filter(issue => {
-            return issue.fields.labels && issue.fields.labels.includes('Maintenance') && issue.fields.issuetype.name !== 'Manual Test';
+            return (issue.fields.labels && issue.fields.labels.includes('Maintenance')) || isMaintenanceTaxItem(issue);
         });
         const otherIssues = filteredIssues.filter(issue => {
-            return (!issue.fields.labels || !issue.fields.labels.includes('Maintenance')) && issue.fields.issuetype.name !== 'Manual Test';
+            return (!issue.fields.labels || !issue.fields.labels.includes('Maintenance')) && !isMaintenanceTaxItem(issue);
         });
 
         // --- RENDER WIDGET: Maintenance Tax % ---
@@ -1126,6 +1132,11 @@ document.addEventListener('DOMContentLoaded', () => {
 
             workSplitData.sort((a, b) => b.percentage - a.percentage);
 
+            const centerWorksplitTotalEl = document.getElementById('center-worksplit-total');
+            if (centerWorksplitTotalEl) {
+                centerWorksplitTotalEl.textContent = workSplitData.length;
+            }
+
             const insightEl = document.getElementById('work-split-insight');
             if (workSplitData.length > 0) {
                 const topContributorPercentage = workSplitData[0].percentage;
@@ -1149,8 +1160,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     datasets: [{
                         label: 'Work Split %',
                         data: workSplitData.map(d => d.percentage),
-                        backgroundColor: '#10b981',
-                        borderColor: '#064e3b',
+                        backgroundColor: '#34D399',
+                        borderColor: 'transparent',
                         borderWidth: 1
                     }]
                 },
@@ -1178,9 +1189,24 @@ document.addEventListener('DOMContentLoaded', () => {
                             // available chart width when work is spread across many developers.
                             max: Math.min(100, Math.ceil((Math.max(...workSplitData.map(d => d.percentage), 0) * 1.2) / 10) * 10 || 10),
                             ticks: {
+                                color: '#94A3B8', // Matches --text-muted
+                                font: { family: 'Inter, sans-serif', size: 11 },
                                 callback: function(value) {
                                     return value + '%';
                                 }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.06)', // Subtle light grid lines
+                                borderColor: 'rgba(255, 255, 255, 0.08)'
+                            }
+                        },
+                        y: {
+                            ticks: {
+                                color: '#E2E8F0', // Matches --text-primary
+                                font: { family: 'Inter, sans-serif', size: 11, weight: '500' }
+                            },
+                            grid: {
+                                display: false // Clean look, no horizontal grid lines needed for labels
                             }
                         }
                     }
@@ -1230,6 +1256,13 @@ document.addEventListener('DOMContentLoaded', () => {
                 else if (p === 'P3' || p === 'P4') priorityCounts.Medium++;
                 else priorityCounts.Low++;
             });
+
+            const totalPriorityIssues = priorityCounts.High + priorityCounts.Medium + priorityCounts.Low;
+            const centerPriorityTotalEl = document.getElementById('center-priority-total');
+            if (centerPriorityTotalEl) {
+                centerPriorityTotalEl.textContent = totalPriorityIssues;
+            }
+
             if (priorityChartInstance) priorityChartInstance.destroy();
             const ctxPriority = document.getElementById('priority-chart').getContext('2d');
             priorityChartInstance = new Chart(ctxPriority, {
@@ -1238,8 +1271,8 @@ document.addEventListener('DOMContentLoaded', () => {
                     labels: ['High', 'Medium', 'Low'],
                     datasets: [{
                         data: [priorityCounts.High, priorityCounts.Medium, priorityCounts.Low],
-                        backgroundColor: ['#dc2626', '#f59e0b', '#10b981'],
-                        borderWidth: 2, borderColor: '#ffffff'
+                        backgroundColor: ['#FB7185', '#FBBF24', '#34D399'],
+                        borderWidth: 2, borderColor: '#151C2E'
                     }]
                 },
                 options: {
@@ -1248,7 +1281,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         legend: {
                             position: 'right',
                             labels: {
-                                color: '#334155',
+                                color: '#E2E8F0',
                                 font: { size: 12, weight: '600' },
                                 padding: 15,
                                 // Include count + % in the legend text itself so priority
@@ -1268,6 +1301,45 @@ document.addEventListener('DOMContentLoaded', () => {
                     }
                 }
             });
+
+            const priorityBtn = document.querySelector('button[data-metric="priority"]');
+            if (priorityBtn) {
+                priorityBtn.onclick = () => {
+                    modalTitle.textContent = 'Issue Distribution by Priority';
+                    modalBody.style.gridTemplateColumns = '1fr';
+                    nonCompliantList.parentElement.style.display = 'none';
+                    compliantList.parentElement.querySelector('h3').textContent = 'Sprint Issues by Priority';
+
+                    let tableHtml = `<table class="dev-table"><thead><tr><th>Issue</th><th>Priority</th><th>Status</th></tr></thead><tbody>`;
+                    
+                    const priorityOrder = { 'P0': 0, 'P1': 1, 'P2': 2, 'P3': 3, 'P4': 4, '': 5 };
+                    const sortedIssues = [...otherIssues].sort((a, b) => {
+                        const pA = a.fields.priority ? a.fields.priority.name : '';
+                        const pB = b.fields.priority ? b.fields.priority.name : '';
+                        const diff = (priorityOrder[pA] ?? 5) - (priorityOrder[pB] ?? 5);
+                        if (diff !== 0) return diff;
+                        return a.key.localeCompare(b.key);
+                    });
+
+                    sortedIssues.forEach(issue => {
+                        const pName = issue.fields.priority ? issue.fields.priority.name : 'None';
+                        const summary = issue.fields.summary ? (issue.fields.summary.length > 80 ? issue.fields.summary.substring(0, 77) + '...' : issue.fields.summary) : '';
+                        let badgeClass = 'sprint-tag';
+                        if (pName === 'P0' || pName === 'P1' || pName === 'P2') badgeClass = 'sprint-tag current';
+                        else if (pName === 'P3' || pName === 'P4') badgeClass = 'sprint-tag upcoming';
+
+                        tableHtml += `<tr>
+                            <td><a href="https://jira.worldline-solutions.com/browse/${issue.key}" target="_blank">${issue.key}</a><br><small>${summary}</small></td>
+                            <td><span class="${badgeClass}">${pName}</span></td>
+                            <td><strong>${issue.fields.status.name}</strong></td>
+                        </tr>`;
+                    });
+                    tableHtml += `</tbody></table>`;
+                    compliantList.innerHTML = tableHtml;
+
+                    modal.style.display = 'block';
+                };
+            }
         } catch (e) {
             console.error("Error rendering priority chart:", e);
         }
