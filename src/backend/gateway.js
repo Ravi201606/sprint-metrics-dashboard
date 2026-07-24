@@ -1,25 +1,13 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
 const { initializeDatabase, getDb } = require('./db.js');
+const syncManager = require('./sync-manager.js');
 
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 9000;
 const FALLBACK_PORT = process.env.FALLBACK_PORT ? parseInt(process.env.FALLBACK_PORT, 10) : 9090;
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
 const DB_FILE_PATH = path.join(PROJECT_ROOT, 'database', 'metrics.db');
-
-const SYNC_LOG_LIMIT = 100;
-const syncState = {
-    running: false,
-    startedAt: null,
-    finishedAt: null,
-    success: null,
-    error: null,
-    exitCode: null,
-    pid: null,
-    logs: []
-};
 
 function writeJson(res, statusCode, payload) {
     res.writeHead(statusCode, { 'Content-Type': 'application/json' });
@@ -79,80 +67,38 @@ async function getIssuesFromDatabase(filterSprintId) {
     return issues;
 }
 
-function appendSyncLog(source, chunk) {
-    const lines = chunk.toString().split(/\r?\n/).map(line => line.trim()).filter(Boolean);
-    for (const line of lines) {
-        syncState.logs.push({ at: new Date().toISOString(), source, message: line });
+function mapJobToLegacyStatus(job) {
+    if (!job) {
+        return {
+            running: false,
+            startedAt: null,
+            finishedAt: null,
+            durationSeconds: null,
+            success: null,
+            error: null,
+            exitCode: null,
+            pid: null,
+            recentLogs: []
+        };
     }
-    if (syncState.logs.length > SYNC_LOG_LIMIT) {
-        syncState.logs.splice(0, syncState.logs.length - SYNC_LOG_LIMIT);
-    }
-}
 
-function getSyncStatus() {
-    const now = Date.now();
-    const started = syncState.startedAt ? Date.parse(syncState.startedAt) : null;
-    const finished = syncState.finishedAt ? Date.parse(syncState.finishedAt) : null;
-    const durationSeconds = started
-        ? Math.floor(((syncState.running ? now : (finished || now)) - started) / 1000)
-        : null;
+    const mappedLogs = (job.logs || []).map(log => ({
+        at: log.timestamp,
+        source: log.level,
+        message: log.message
+    }));
 
     return {
-        running: syncState.running,
-        startedAt: syncState.startedAt,
-        finishedAt: syncState.finishedAt,
-        durationSeconds,
-        success: syncState.success,
-        error: syncState.error,
-        exitCode: syncState.exitCode,
-        pid: syncState.pid,
-        recentLogs: syncState.logs.slice(-15)
+        running: job.status === 'RUNNING',
+        startedAt: job.started_at,
+        finishedAt: job.finished_at,
+        durationSeconds: job.duration_seconds,
+        success: job.success === 1 ? true : (job.success === 0 ? false : null),
+        error: job.error,
+        exitCode: job.exit_code,
+        pid: job.pid,
+        recentLogs: mappedLogs.slice(-15) // Keep last 15 logs for UI compatibility
     };
-}
-
-function startSyncJob() {
-    if (syncState.running) {
-        return false;
-    }
-
-    const env = { ...process.env, DISCOVERY_ONLY: 'true' };
-    syncState.running = true;
-    syncState.startedAt = new Date().toISOString();
-    syncState.finishedAt = null;
-    syncState.success = null;
-    syncState.error = null;
-    syncState.exitCode = null;
-    syncState.logs = [];
-
-    const child = spawn('node', ['src/backend/harvester.js'], { cwd: PROJECT_ROOT, env });
-    syncState.pid = child.pid || null;
-    appendSyncLog('system', `Sync started (pid=${syncState.pid || 'n/a'})`);
-
-    child.stdout.on('data', data => appendSyncLog('stdout', data));
-    child.stderr.on('data', data => appendSyncLog('stderr', data));
-
-    child.on('error', (err) => {
-        syncState.running = false;
-        syncState.finishedAt = new Date().toISOString();
-        syncState.success = false;
-        syncState.exitCode = -1;
-        syncState.error = err.message;
-        appendSyncLog('system', `Sync process error: ${err.message}`);
-    });
-
-    child.on('close', (code) => {
-        syncState.running = false;
-        syncState.finishedAt = new Date().toISOString();
-        syncState.exitCode = code;
-        syncState.success = code === 0;
-        if (code !== 0 && !syncState.error) {
-            syncState.error = `Harvester exited with code ${code}`;
-        }
-        appendSyncLog('system', `Sync finished with exit code ${code}`);
-        syncState.pid = null;
-    });
-
-    return true;
 }
 
 const server = http.createServer((req, res) => {
@@ -161,13 +107,27 @@ const server = http.createServer((req, res) => {
 
     if (pathname === '/sync') {
         console.log('Sync endpoint hit');
-        if (syncState.running) {
-            writeJson(res, 202, { ok: true, message: 'Sync already running.', status: getSyncStatus() });
-            return;
-        }
+        
+        syncManager.startSync()
+            .then((result) => {
+                syncManager.getStatus(result.jobId)
+                    .then((job) => {
+                        const statusCode = result.alreadyRunning ? 202 : 202; // Always return 202 per specification for start requests
+                        writeJson(res, statusCode, {
+                            ok: true,
+                            message: result.alreadyRunning ? 'Sync already running.' : 'Sync started.',
+                            status: mapJobToLegacyStatus(job)
+                        });
+                    });
+            })
+            .catch((err) => {
+                console.error('Failed to process sync request:', err);
+                writeJson(res, 500, {
+                    error: 'Failed to trigger sync job.',
+                    details: err.message
+                });
+            });
 
-        startSyncJob();
-        writeJson(res, 202, { ok: true, message: 'Sync started.', status: getSyncStatus() });
     } else if (pathname === '/api/issues') {
         const sprintId = requestUrl.searchParams.get('sprintId');
         getIssuesFromDatabase(sprintId)
@@ -181,8 +141,24 @@ const server = http.createServer((req, res) => {
                     details: err.message
                 });
             });
+
     } else if (pathname === '/sync/status') {
-        writeJson(res, 200, { ok: true, status: getSyncStatus() });
+        const jobId = requestUrl.searchParams.get('jobId');
+        syncManager.getStatus(jobId)
+            .then((job) => {
+                writeJson(res, 200, {
+                    ok: true,
+                    status: mapJobToLegacyStatus(job)
+                });
+            })
+            .catch((err) => {
+                console.error('Failed to get sync status:', err);
+                writeJson(res, 500, {
+                    error: 'Failed to fetch sync job status.',
+                    details: err.message
+                });
+            });
+
     } else {
         const relativePath = pathname === '/'
             ? path.join('src', 'frontend', 'portal.html')
@@ -235,6 +211,13 @@ server.on('error', (e) => {
     }
 });
 
-server.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${server.address().port}/`);
-});
+initializeDatabase()
+    .then(() => {
+        server.listen(PORT, () => {
+            console.log(`Server running at http://localhost:${server.address().port}/`);
+        });
+    })
+    .catch((err) => {
+        console.error('Failed to initialize database on startup:', err);
+        process.exit(1);
+    });

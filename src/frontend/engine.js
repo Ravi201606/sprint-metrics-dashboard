@@ -785,6 +785,7 @@ document.addEventListener('DOMContentLoaded', () => {
         const trendEl = document.getElementById(trendElId);
         if (!trendEl) return;
         const badgeEl = trendEl.querySelector('.trend-badge');
+        const labelEl = trendEl.querySelector('.trend-label');
 
         if (!selectedSprintId || currentValue === null || currentValue === undefined || isNaN(currentValue)) {
             trendEl.style.visibility = 'hidden';
@@ -816,6 +817,7 @@ document.addEventListener('DOMContentLoaded', () => {
         trendEl.classList.toggle('trend-up', improved);
         trendEl.classList.toggle('trend-down', !improved);
         trendEl.style.visibility = 'visible';
+        
         if (badgeEl) {
             if (isNew) {
                 badgeEl.textContent = 'New';
@@ -823,6 +825,12 @@ document.addEventListener('DOMContentLoaded', () => {
                 const arrow = delta >= 0 ? '↑' : '↓';
                 badgeEl.textContent = `${arrow} ${Math.abs(delta).toFixed(1)}%`;
             }
+        }
+
+        if (labelEl) {
+            const prevSprint = prevSprintId && sprintsMap.has(prevSprintId) ? sprintsMap.get(prevSprintId) : null;
+            const prevSprintName = prevSprint ? prevSprint.name : 'previous sprint';
+            labelEl.textContent = `vs ${prevSprintName}`;
         }
     }
 

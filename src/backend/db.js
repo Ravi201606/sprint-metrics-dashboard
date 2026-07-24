@@ -11,6 +11,46 @@ let statements = {};
 function ensureIndexes() {
     db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_status_transitions_unique ON status_transitions(issue_key, from_status, to_status, changed_at);`);
     db.run(`CREATE INDEX IF NOT EXISTS idx_status_transitions_issue_key ON status_transitions(issue_key);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_issue_sprints_issue_key ON issue_sprints(issue_key);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_issue_sprints_sprint_name ON issue_sprints(sprint_name);`);
+
+    // Create sync_jobs table if it does not exist
+    db.run(`
+        CREATE TABLE IF NOT EXISTS sync_jobs (
+            id TEXT PRIMARY KEY,
+            status TEXT NOT NULL,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_seconds INTEGER,
+            success INTEGER,
+            error TEXT,
+            exit_code INTEGER,
+            pid INTEGER,
+            progress INTEGER DEFAULT 0,
+            current_stage TEXT NOT NULL
+        );
+    `);
+
+    // Create sync_job_logs table if it does not exist
+    db.run(`
+        CREATE TABLE IF NOT EXISTS sync_job_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            job_id TEXT NOT NULL,
+            timestamp TEXT NOT NULL,
+            level TEXT NOT NULL,
+            message TEXT NOT NULL,
+            FOREIGN KEY(job_id) REFERENCES sync_jobs(id) ON DELETE CASCADE
+        );
+    `);
+
+    db.run(`CREATE INDEX IF NOT EXISTS idx_sync_job_logs_job_id ON sync_job_logs(job_id);`);
+
+    // Clean up any dangling RUNNING sync jobs left over from a previous server crash or abort
+    try {
+        db.run(`UPDATE sync_jobs SET status = 'FAILED', current_stage = 'FAILED', error = 'Server restarted while job was running.' WHERE status = 'RUNNING';`);
+    } catch (err) {
+        console.warn('Error during startup sync job cleanup:', err.message);
+    }
 }
 
 async function initializeDatabase() {
@@ -82,6 +122,39 @@ function saveDatabase() {
     }
 }
 
+function freeStatements() {
+    for (const key of Object.keys(statements)) {
+        if (statements[key] && typeof statements[key].free === 'function') {
+            try {
+                statements[key].free();
+            } catch (err) {
+                console.warn(`Error freeing statement ${key}:`, err.message);
+            }
+        }
+    }
+    statements = {};
+}
+
+async function reloadDatabase() {
+    console.log('Reloading database from disk...');
+    
+    // Free existing prepared statements to prevent memory leaks or sql.js errors
+    freeStatements();
+    
+    if (db) {
+        try {
+            db.close();
+        } catch (err) {
+            console.warn('Error closing old database instance:', err.message);
+        }
+        db = null;
+    }
+
+    // Force re-initialization which will load the updated file from disk
+    await initializeDatabase();
+    console.log('Database successfully reloaded and statements prepared.');
+}
+
 function getDb() {
     if (!db) {
         throw new Error('Database not initialized. Call initializeDatabase first.');
@@ -105,6 +178,7 @@ if (require.main === module) {
 module.exports = {
     initializeDatabase,
     saveDatabase,
+    reloadDatabase,
     getDb,
     getStatements
 };
