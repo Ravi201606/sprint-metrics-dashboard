@@ -8,6 +8,11 @@ const schemaFilePath = path.join(__dirname, '..', '..', 'database', 'schema.sql'
 let db = null;
 let statements = {};
 
+function ensureIndexes() {
+    db.run(`CREATE UNIQUE INDEX IF NOT EXISTS idx_status_transitions_unique ON status_transitions(issue_key, from_status, to_status, changed_at);`);
+    db.run(`CREATE INDEX IF NOT EXISTS idx_status_transitions_issue_key ON status_transitions(issue_key);`);
+}
+
 async function initializeDatabase() {
     if (db) return db;
 
@@ -21,6 +26,8 @@ async function initializeDatabase() {
         db.run(schema);
         console.log('New database created and schema applied.');
     }
+
+    ensureIndexes();
 
     prepareStatements();
     return db;
@@ -43,9 +50,11 @@ function prepareStatements() {
     `);
 
     statements.insertStatusTransition = db.prepare(`
-        INSERT INTO status_transitions (issue_key, from_status, to_status, changed_at)
+        INSERT OR IGNORE INTO status_transitions (issue_key, from_status, to_status, changed_at)
         VALUES (?, ?, ?, ?);
     `);
+    
+    statements.deleteStatusTransitions = db.prepare(`DELETE FROM status_transitions WHERE issue_key = ?;`);
     
     statements.insertIssueSprint = db.prepare(`
         INSERT INTO issue_sprints (issue_key, sprint_id, sprint_name, sprint_state, sprint_start_date, sprint_end_date, added_at, removed_at)

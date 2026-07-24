@@ -5,6 +5,9 @@ document.addEventListener('DOMContentLoaded', () => {
     const sprintGroup = document.getElementById('sprint-filter-group');
     const monthGroup = document.getElementById('month-filter-group');
     const syncButton = document.getElementById('sync-button');
+    const syncStatusText = document.getElementById('sync-status');
+    const toastHost = document.getElementById('toast-host');
+    const mainContent = document.querySelector('.main-content');
     const sprintTrigger = document.getElementById('sprintTrigger');
     const sprintMenu = document.getElementById('sprintMenu');
     const sprintValueLabel = sprintTrigger ? sprintTrigger.querySelector('.sprint-value') : null;
@@ -284,22 +287,33 @@ document.addEventListener('DOMContentLoaded', () => {
         return false;
     }
 
-    // 1. Initial Data check
-    const issues = (window.jiraStore && window.jiraStore.issues) ? window.jiraStore.issues : [];
-    console.log('Successfully loaded JIRA Issues:', issues.length);
-
-    // 2. Populate Filters (Sprints & Months)
+    // 1. Data state and filter collections
+    let issues = [];
     const sprintsMap = new Map();
-    const monthsSet = new Set();
 
-    try {
+    function setDashboardState(state, message = '') {
+        if (!mainContent) return;
+
+        mainContent.classList.remove('loading', 'error');
+        mainContent.removeAttribute('data-status-text');
+        if (state === 'loading' || state === 'error') {
+            mainContent.classList.add(state);
+            mainContent.setAttribute('data-status-text', message);
+        }
+    }
+
+    function populateFiltersFromIssues() {
+        const monthsSet = new Set();
+        sprintsMap.clear();
+
+        sprintSelect.innerHTML = '<option value="">Agile Sprints</option>';
+        monthSelect.innerHTML = '<option value="">Calendar Months</option>';
+
         issues.forEach(issue => {
-            // Extract Months from issue created date
             if (issue.fields.created) {
-                monthsSet.add(issue.fields.created.substring(0, 7)); // 'YYYY-MM'
+                monthsSet.add(issue.fields.created.substring(0, 7));
             }
 
-            // Extract Sprints from customfield_12041
             const sprintArr = issue.fields.customfield_12041;
             if (sprintArr && Array.isArray(sprintArr)) {
                 sprintArr.forEach(sprintStr => {
@@ -308,7 +322,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     const stateMatch = sprintStr.match(/state=([^,\]]+)/);
                     const startDateMatch = sprintStr.match(/startDate=([^,\]]+)/);
                     const endDateMatch = sprintStr.match(/endDate=([^,\]]+)/);
-                    
+
                     if (idMatch && nameMatch) {
                         const id = idMatch[1];
                         const name = nameMatch[1];
@@ -321,12 +335,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
         });
 
-        console.log('Sprints Map Size:', sprintsMap.size);
-        console.log('Sprints Map Keys:', Array.from(sprintsMap.keys()).slice(0, 5));
-        console.log('Sprints Map Values:', Array.from(sprintsMap.values()).slice(0, 5));
-
-        // Sort Sprints chronologically by ID (larger ID means newer sprint)
-        const sortedSprints = Array.from(sprintsMap.values()).sort((a, b) => parseInt(b.id) - parseInt(a.id));
+        const sortedSprints = Array.from(sprintsMap.values()).sort((a, b) => parseInt(b.id, 10) - parseInt(a.id, 10));
         buildSprintMenuOptions(sortedSprints);
         sortedSprints.forEach(sprint => {
             const opt = document.createElement('option');
@@ -335,32 +344,59 @@ document.addEventListener('DOMContentLoaded', () => {
             sprintSelect.appendChild(opt);
         });
 
-        // Sort Months in descending order
         const sortedMonths = Array.from(monthsSet).sort().reverse();
         sortedMonths.forEach(month => {
             const opt = document.createElement('option');
             opt.value = month;
-            // Format YYYY-MM as readable Month YYYY (e.g. "July 2026")
             const [year, mNum] = month.split('-');
-            const dateObj = new Date(parseInt(year), parseInt(mNum) - 1, 1);
+            const dateObj = new Date(parseInt(year, 10), parseInt(mNum, 10) - 1, 1);
             const mName = dateObj.toLocaleString('default', { month: 'long' });
             opt.textContent = `${mName} ${year}`;
             monthSelect.appendChild(opt);
         });
 
-        // Set default selection to the active sprint, if one exists
         const activeSprint = sortedSprints.find(s => s.state === 'ACTIVE');
         if (activeSprint) {
             sprintSelect.value = activeSprint.id;
-            // Disable the month selector to reflect the default sprint selection
             monthSelect.value = '';
             monthSelect.disabled = true;
             monthGroup.classList.add('disabled');
+        } else {
+            monthSelect.disabled = false;
+            monthGroup.classList.remove('disabled');
         }
 
+        updateSprintTriggerLabel();
         renderCustomSprintMenu();
-    } catch (e) {
-        console.error("Error populating filters:", e);
+    }
+
+    async function loadIssuesFromApi() {
+        setDashboardState('loading', 'Loading issues from database...');
+        try {
+            const response = await fetch('/api/issues', { cache: 'no-store' });
+            if (!response.ok) {
+                let details = '';
+                try {
+                    const errorPayload = await response.json();
+                    details = errorPayload && errorPayload.details ? ` ${errorPayload.details}` : '';
+                } catch (parseError) {
+                    details = '';
+                }
+                throw new Error(`Failed to fetch issues (${response.status}).${details}`);
+            }
+
+            const payload = await response.json();
+            issues = Array.isArray(payload.issues) ? payload.issues : [];
+            console.log('Successfully loaded JIRA Issues:', issues.length);
+
+            populateFiltersFromIssues();
+            updateDashboard();
+            setDashboardState('ready');
+        } catch (error) {
+            console.error('Error loading issues from API:', error);
+            setDashboardState('error', `Unable to load issues. ${error.message}`);
+            showToast('Dashboard Load Failed', 'Could not load issues from database. See console for details.', 'error', 6500);
+        }
     }
 
     if (sprintTrigger && sprintMenu) {
@@ -445,43 +481,232 @@ document.addEventListener('DOMContentLoaded', () => {
         updateDashboard();
     });
 
-    // 4. Initiate Sync Click handler
-    syncButton.addEventListener('click', () => {
-        syncButton.disabled = true;
+    let syncPollHandle = null;
+    let syncStartedAt = null;
+
+    function formatSyncDuration(totalSeconds) {
+        const safeSeconds = Math.max(0, totalSeconds || 0);
+        const hours = Math.floor(safeSeconds / 3600);
+        const minutes = Math.floor((safeSeconds % 3600) / 60);
+        const seconds = safeSeconds % 60;
+
+        if (hours > 0) {
+            return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+        }
+        return `${minutes}:${String(seconds).padStart(2, '0')}`;
+    }
+
+    function formatTimestamp(isoValue) {
+        if (!isoValue) return 'unknown time';
+        const date = new Date(isoValue);
+        if (Number.isNaN(date.getTime())) return 'unknown time';
+        return date.toLocaleString();
+    }
+
+    function setSyncStatus(message, tone = 'idle') {
+        if (!syncStatusText) return;
+        syncStatusText.textContent = message;
+        syncStatusText.classList.remove('idle', 'running', 'success', 'error');
+        syncStatusText.classList.add(tone);
+    }
+
+    function showToast(title, message, tone = 'info', timeoutMs = 4200) {
+        if (!toastHost) return;
+
+        const toast = document.createElement('div');
+        toast.className = `toast toast-${tone}`;
+
+        const heading = document.createElement('p');
+        heading.className = 'toast-title';
+        heading.textContent = title;
+
+        const detail = document.createElement('p');
+        detail.className = 'toast-message';
+        detail.textContent = message;
+
+        toast.appendChild(heading);
+        toast.appendChild(detail);
+        toastHost.appendChild(toast);
+
+        window.setTimeout(() => {
+            toast.style.opacity = '0';
+            toast.style.transform = 'translateY(-6px)';
+            toast.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+            window.setTimeout(() => {
+                if (toast.parentNode) {
+                    toast.parentNode.removeChild(toast);
+                }
+            }, 220);
+        }, timeoutMs);
+    }
+
+    function resetSyncButton() {
+        syncButton.disabled = false;
+        syncButton.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
+            </svg>`;
+        syncButton.title = 'Synchronize JIRA Data';
+        syncButton.setAttribute('aria-label', 'Synchronize JIRA data');
+    }
+
+    function setSyncButtonProgress(secondsElapsed) {
+        const timerLabel = formatSyncDuration(secondsElapsed);
         syncButton.innerHTML = `
             <svg class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:inline-block; vertical-align:middle; animation: spin 1s linear infinite;">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-opacity="0.25" fill="none"/>
                 <path d="M4 12a8 8 0 0 1 8-8V0C5.373 0 0 5.373 0 12h4z" fill="currentColor"/>
-            </svg> Synchronizing...`;
-            
-        fetch('/sync')
-            .then(res => {
-                if (res.ok) {
-                    alert('Sync successfully completed! Loading updated metrics dashboard.');
-                    window.location.reload();
-                } else {
-                    throw new Error('Sync endpoint failed');
-                }
-            })
-            .catch(error => {
-                console.error('Sync failed:', error);
-                alert('Jira data synchronization failed. Operating with cached data. See console logs.');
-                syncButton.disabled = false;
-                syncButton.innerHTML = `
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path>
-                    </svg> Initiate Sync`;
-            });
+            </svg>`;
+        syncButton.title = `Synchronizing... ${timerLabel}`;
+        syncButton.setAttribute('aria-label', `Synchronizing ${timerLabel}`);
+        setSyncStatus(`Synchronizing ${timerLabel}`, 'running');
+    }
+
+    function applySyncStatus(status, currentElapsedSeconds = 0) {
+        if (status && status.running) {
+            syncButton.disabled = true;
+            setSyncButtonProgress(Math.max(0, currentElapsedSeconds));
+            return;
+        }
+
+        resetSyncButton();
+        if (status && status.success === true) {
+            const finishedLabel = formatTimestamp(status.finishedAt);
+            setSyncStatus(`Last sync successful at ${finishedLabel}`, 'success');
+            return;
+        }
+
+        if (status && status.success === false) {
+            const finishedLabel = formatTimestamp(status.finishedAt);
+            const reason = status.error ? ` (${status.error})` : '';
+            setSyncStatus(`Last sync failed at ${finishedLabel}${reason}`, 'error');
+            return;
+        }
+
+        setSyncStatus('Sync idle. Ready.', 'idle');
+    }
+
+    function ensureSyncPolling() {
+        if (!syncPollHandle) {
+            syncPollHandle = setInterval(pollSyncStatus, 3000);
+        }
+    }
+
+    function stopSyncPolling() {
+        if (syncPollHandle) {
+            clearInterval(syncPollHandle);
+            syncPollHandle = null;
+        }
+    }
+
+    async function pollSyncStatus() {
+        try {
+            const response = await fetch('/sync/status', { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Status endpoint failed with ${response.status}`);
+            }
+            const payload = await response.json();
+            const status = payload.status || {};
+            const elapsed = typeof status.durationSeconds === 'number'
+                ? status.durationSeconds
+                : (syncStartedAt ? Math.floor((Date.now() - syncStartedAt) / 1000) : 0);
+
+            applySyncStatus(status, elapsed);
+
+            if (status.running) {
+                return;
+            }
+
+            stopSyncPolling();
+            if (status.success) {
+                showToast('Sync Complete', 'Jira data synchronized. Refreshing dashboard...', 'success', 2200);
+                window.setTimeout(() => window.location.reload(), 900);
+                return;
+            }
+
+            const detail = status.error ? `Reason: ${status.error}` : 'The harvester returned a non-zero exit.';
+            showToast('Sync Failed', `${detail} Using cached data.`, 'error', 6200);
+            resetSyncButton();
+            applySyncStatus(status, elapsed);
+        } catch (error) {
+            console.error('Sync status polling failed:', error);
+            stopSyncPolling();
+            showToast('Status Check Failed', 'Unable to verify sync status. Please check logs and retry.', 'error', 6200);
+            resetSyncButton();
+            setSyncStatus('Unable to verify sync status.', 'error');
+        }
+    }
+
+    async function refreshSyncStatusSnapshot() {
+        try {
+            const response = await fetch('/sync/status', { cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Status endpoint failed with ${response.status}`);
+            }
+            const payload = await response.json();
+            const status = payload.status || {};
+            const elapsed = typeof status.durationSeconds === 'number' ? status.durationSeconds : 0;
+            applySyncStatus(status, elapsed);
+
+            if (status.running) {
+                syncStartedAt = status.startedAt ? Date.parse(status.startedAt) : Date.now();
+                ensureSyncPolling();
+            }
+        } catch (error) {
+            console.error('Initial sync status check failed:', error);
+            setSyncStatus('Sync status unavailable.', 'error');
+            showToast('Sync Status Unavailable', 'Could not reach /sync/status. Showing best known state.', 'info', 4200);
+        }
+    }
+
+    // 4. Initiate Sync Click handler
+    syncButton.addEventListener('click', async () => {
+        syncButton.disabled = true;
+        syncStartedAt = Date.now();
+        setSyncButtonProgress(0);
+        setSyncStatus('Starting sync...', 'running');
+
+        try {
+            const response = await fetch('/sync', { method: 'GET', cache: 'no-store' });
+            if (!response.ok) {
+                throw new Error(`Sync endpoint failed with ${response.status}`);
+            }
+
+            const payload = await response.json();
+            if (payload && payload.status && payload.status.startedAt) {
+                syncStartedAt = Date.parse(payload.status.startedAt);
+            }
+
+            await pollSyncStatus();
+            ensureSyncPolling();
+        } catch (error) {
+            console.error('Sync failed to start:', error);
+            stopSyncPolling();
+            showToast('Sync Start Failed', 'Unable to start Jira sync. See console logs for details.', 'error', 6200);
+            resetSyncButton();
+            setSyncStatus('Sync start failed.', 'error');
+        }
     });
+
+    refreshSyncStatusSnapshot();
 
     // Style for CSS animation spin
     const style = document.createElement('style');
     style.innerHTML = `@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`;
     document.head.appendChild(style);
 
+    // Normalizes display names so "MOHAMED EL BOUTI" and "Sarath Subburaj" render
+    // consistently, without mangling names that are already correctly cased.
+    function formatDeveloperName(name) {
+        if (!name) return name;
+        const isShouty = name === name.toUpperCase() && /[A-Z]/.test(name);
+        if (!isShouty) return name;
+        return name.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    }
+
     function getDeveloperForStory(issue) {
         if (!issue.changelog || !issue.changelog.histories) {
-            return issue.fields.assignee ? issue.fields.assignee.displayName : null;
+            return issue.fields.assignee ? formatDeveloperName(issue.fields.assignee.displayName) : null;
         }
 
         const allChanges = [];
@@ -536,13 +761,68 @@ document.addEventListener('DOMContentLoaded', () => {
                     lastAssigneeBeforeDone = change.toString;
                 }
             }
-            if (lastAssigneeBeforeDone) return lastAssigneeBeforeDone;
+            if (lastAssigneeBeforeDone) return formatDeveloperName(lastAssigneeBeforeDone);
         }
         
-        return issue.fields.assignee ? issue.fields.assignee.displayName : null;
+        return issue.fields.assignee ? formatDeveloperName(issue.fields.assignee.displayName) : null;
     }
 
     // 5. Main Dashboard Render Engine
+    // Returns the sprint ID immediately before the given one (by numeric ID order),
+    // or null if there isn't one in the currently loaded sprint set.
+    function getPreviousSprintId(selectedSprintId) {
+        if (!selectedSprintId || !sprintsMap.has(selectedSprintId)) return null;
+        const ids = Array.from(sprintsMap.keys()).map(id => parseInt(id, 10)).sort((a, b) => a - b);
+        const idx = ids.indexOf(parseInt(selectedSprintId, 10));
+        return idx > 0 ? String(ids[idx - 1]) : null;
+    }
+
+    // Persists the current sprint's value for a metric and, if the immediately
+    // preceding sprint's value is known, renders a real % delta badge.
+    // If there's no prior sprint to compare against, the badge is hidden rather
+    // than showing a fabricated number.
+    function applyTrend(metricKey, trendElId, currentValue, selectedSprintId, higherIsBetter = true) {
+        const trendEl = document.getElementById(trendElId);
+        if (!trendEl) return;
+        const badgeEl = trendEl.querySelector('.trend-badge');
+
+        if (!selectedSprintId || currentValue === null || currentValue === undefined || isNaN(currentValue)) {
+            trendEl.style.visibility = 'hidden';
+            return;
+        }
+
+        let store = {};
+        try {
+            store = JSON.parse(localStorage.getItem('sprintMetricHistory') || '{}');
+        } catch (e) {
+            store = {};
+        }
+        store[metricKey] = store[metricKey] || {};
+        store[metricKey][selectedSprintId] = currentValue;
+        localStorage.setItem('sprintMetricHistory', JSON.stringify(store));
+
+        const prevSprintId = getPreviousSprintId(selectedSprintId);
+        const prevValue = prevSprintId ? store[metricKey][prevSprintId] : undefined;
+
+        if (prevValue === undefined || prevValue === null) {
+            trendEl.style.visibility = 'hidden';
+            return;
+        }
+
+        const delta = prevValue === 0
+            ? (currentValue > 0 ? 100 : 0)
+            : ((currentValue - prevValue) / Math.abs(prevValue)) * 100;
+
+        const improved = higherIsBetter ? delta >= 0 : delta <= 0;
+        trendEl.classList.toggle('trend-up', improved);
+        trendEl.classList.toggle('trend-down', !improved);
+        trendEl.style.visibility = 'visible';
+        if (badgeEl) {
+            const arrow = delta >= 0 ? '↑' : '↓';
+            badgeEl.textContent = `${arrow} ${Math.abs(delta).toFixed(1)}%`;
+        }
+    }
+
     function updateDashboard() {
         const selectedSprintId = sprintSelect.value;
         const selectedMonth = monthSelect.value;
@@ -597,6 +877,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const maintenanceTaxPercentage = totalSeconds > 0 ? Math.round((maintenanceSeconds / totalSeconds) * 100) : 0;
             document.getElementById('maintenance-tax-value').textContent = `${maintenanceTaxPercentage}%`;
             document.getElementById('maintenance-tax-sub').textContent = `${(maintenanceSeconds / 3600).toFixed(1)} of ${(totalSeconds / 3600).toFixed(1)} total hours`;
+            applyTrend('maintenance', 'maintenance-trend', maintenanceTaxPercentage, selectedSprintId, false);
 
             const maintenanceBtn = document.querySelector('button[data-metric="maintenance"]');
             maintenanceBtn.onclick = () => {
@@ -644,6 +925,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const fpyPercentage = completedStories.length > 0 ? Math.round((fpyCompliantCount / completedStories.length) * 100) : 0;
             document.getElementById('fpy-value').textContent = `${fpyPercentage}%`;
             document.getElementById('fpy-sub').textContent = `${fpyCompliantCount} of ${completedStories.length} stories passed`;
+            applyTrend('fpy', 'fpy-trend', fpyPercentage, selectedSprintId, true);
             
             const fpyBtn = document.querySelector('button[data-metric="fpy"]');
             fpyBtn.onclick = () => showModal('First Pass Yield (Stories)', fpyRawData);
@@ -665,11 +947,13 @@ document.addEventListener('DOMContentLoaded', () => {
                         const linkedIssue = link.outwardIssue || link.inwardIssue;
                         if (linkedIssue && linkedIssue.fields.issuetype.name === 'Bug') {
                             hasLinkedBug = true;
-                            dirRawData.nonCompliant.push(story);
                         }
                     });
                 }
-                if (!hasLinkedBug) {
+                // Push the story once regardless of how many bugs are linked to it
+                if (hasLinkedBug) {
+                    dirRawData.nonCompliant.push(story);
+                } else {
                     dirRawData.compliant.push(story);
                 }
             });
@@ -677,6 +961,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const dirPercentage = completedStories.length > 0 ? Math.round((storiesWithBugs / completedStories.length) * 100) : 0;
             document.getElementById('dir-value').textContent = `${dirPercentage}%`;
             document.getElementById('dir-sub').textContent = `${storiesWithBugs} of ${completedStories.length} stories with bugs`;
+            applyTrend('dir', 'dir-trend', dirPercentage, selectedSprintId, false);
             
             const dirBtn = document.querySelector('button[data-metric="dir"]');
             dirBtn.onclick = () => showModal('Defect Injection Rate', dirRawData);
@@ -693,6 +978,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 totalStoryPoints += story.fields.customfield_10016 || 0;
             });
             document.getElementById('velocity-value').textContent = totalStoryPoints;
+            applyTrend('velocity', 'velocity-trend', totalStoryPoints, selectedSprintId, true);
         } catch (e) {
             console.error("Error rendering Average Sprint Velocity widget:", e);
             document.getElementById('velocity-value').textContent = 'Error';
@@ -754,6 +1040,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const avgCycleTime = completedStoriesWithCycleTime > 0 ? (totalCycleTime / completedStoriesWithCycleTime).toFixed(2) : 0;
             document.getElementById('cycle-time-value').textContent = `${avgCycleTime} days`;
             document.getElementById('cycle-time-sub').textContent = `Total: ${totalCycleTime.toFixed(0)}d / ${completedStoriesWithCycleTime} stories`;
+            applyTrend('cycle-time', 'cycle-time-trend', avgCycleTime, selectedSprintId, false);
 
             const cycleTimeBtn = document.querySelector('button[data-metric="cycle-time"]');
             cycleTimeBtn.onclick = () => {
@@ -795,6 +1082,7 @@ document.addEventListener('DOMContentLoaded', () => {
             
             sprintProgressValue.textContent = `${percentage}%`;
             sprintProgressSub.textContent = `${doneCount} of ${takenCount} stories completed`;
+            applyTrend('sprint-progress', 'sprint-progress-trend', percentage, selectedSprintId, true);
 
             const sprintProgressBtn = document.querySelector('button[data-metric="sprint-progress"]');
             sprintProgressBtn.onclick = () => {
@@ -885,7 +1173,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     scales: {
                         x: {
                             beginAtZero: true,
-                            max: 100,
+                            // Scale to the largest share + 20% headroom (capped at 100) instead
+                            // of always fixing the axis to 100%, so bars actually use the
+                            // available chart width when work is spread across many developers.
+                            max: Math.min(100, Math.ceil((Math.max(...workSplitData.map(d => d.percentage), 0) * 1.2) / 10) * 10 || 10),
                             ticks: {
                                 callback: function(value) {
                                     return value + '%';
@@ -953,7 +1244,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 },
                 options: {
                     responsive: true, maintainAspectRatio: false, cutout: '65%',
-                    plugins: { legend: { position: 'right', labels: { color: '#334155', font: { size: 12, weight: '600' }, padding: 15 } } }
+                    plugins: {
+                        legend: {
+                            position: 'right',
+                            labels: {
+                                color: '#334155',
+                                font: { size: 12, weight: '600' },
+                                padding: 15,
+                                // Include count + % in the legend text itself so priority
+                                // isn't communicated by color alone (color-blind accessibility).
+                                generateLabels: (chart) => {
+                                    const data = chart.data.datasets[0].data;
+                                    const total = data.reduce((a, b) => a + b, 0) || 1;
+                                    return chart.data.labels.map((label, i) => ({
+                                        text: `${label}: ${data[i]} (${Math.round((data[i] / total) * 100)}%)`,
+                                        fillStyle: chart.data.datasets[0].backgroundColor[i],
+                                        strokeStyle: chart.data.datasets[0].backgroundColor[i],
+                                        index: i
+                                    }));
+                                }
+                            }
+                        }
+                    }
                 }
             });
         } catch (e) {
@@ -971,11 +1283,11 @@ document.addEventListener('DOMContentLoaded', () => {
                             const sprintStartDate = new Date(selectedSprint.startDate);
                             const sprintEndDate = new Date(selectedSprint.endDate);
                             if (worklogStarted >= sprintStartDate && worklogStarted <= sprintEndDate) {
-                                const devName = w.author ? w.author.displayName : 'Unknown Developer';
+                                const devName = w.author ? formatDeveloperName(w.author.displayName) : 'Unknown Developer';
                                 developerLoggedSeconds[devName] = (developerLoggedSeconds[devName] || 0) + (w.timeSpentSeconds || 0);
                             }
                         } else {
-                            const devName = w.author ? w.author.displayName : 'Unknown Developer';
+                            const devName = w.author ? formatDeveloperName(w.author.displayName) : 'Unknown Developer';
                             developerLoggedSeconds[devName] = (developerLoggedSeconds[devName] || 0) + (w.timeSpentSeconds || 0);
                         }
                     });
@@ -1123,5 +1435,5 @@ document.addEventListener('DOMContentLoaded', () => {
     window.onclick = (event) => { if (event.target == modal) modal.style.display = 'none'; };
 
     // 6. Run on first load
-    updateDashboard();
+    loadIssuesFromApi();
 });

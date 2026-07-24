@@ -48,5 +48,6 @@ CREATE TABLE sync_state (
 
 CREATE INDEX idx_worklogs_issue_key ON worklogs(issue_key);
 CREATE INDEX idx_status_transitions_issue_key ON status_transitions(issue_key);
+CREATE UNIQUE INDEX idx_status_transitions_unique ON status_transitions(issue_key, from_status, to_status, changed_at);
 CREATE INDEX idx_issue_sprints_issue_key ON issue_sprints(issue_key);
 CREATE INDEX idx_issue_sprints_sprint_name ON issue_sprints(sprint_name);

@@ -1,7 +1,5 @@
 require('dotenv').config();
 const https = require('https');
-const fs = require('fs');
-const path = require('path');
 const { initializeDatabase, saveDatabase, getDb, getStatements } = require('./db.js');
 
 // --- Configuration ---
@@ -16,7 +14,10 @@ const JIRA_FIELDS = ['summary', 'status', 'issuetype', 'assignee', 'priority', '
 const options = { headers: { 'Authorization': `Bearer ${JIRA_API_TOKEN}`, 'Content-Type': 'application/json' } };
 
 function buildJql() {
-    const scope = process.env.HARVEST_SCOPE || 'sprint';
+    const configuredScope = process.env.HARVEST_SCOPE;
+    const hasSprintNames = Boolean(process.env.SPRINT_NAMES && process.env.SPRINT_NAMES.trim());
+    const hasYearFilter = Boolean((process.env.YEAR_FILTER || process.env.YEAR || process.env.year || '').toString().trim());
+    const scope = configuredScope || (hasYearFilter ? 'year' : (hasSprintNames ? 'sprint' : 'full'));
     const baseJql = 'project = ODCNG AND "Affect Team" = "Sahyadri Dev Team"';
 
     if (scope === 'sprint') {
@@ -28,9 +29,13 @@ function buildJql() {
         const sprintNamesArray = sprintNames.split(',').map(name => `"${name.trim()}"`);
         return `${baseJql} AND Sprint in (${sprintNamesArray.join(',')}) ORDER BY updated DESC`;
     } else if (scope === 'year') {
-        const year = process.env.YEAR_FILTER;
+        const year = (process.env.YEAR_FILTER || process.env.YEAR || process.env.year || '').toString().trim();
         if (!year) {
-            console.error('Error: HARVEST_SCOPE is "year" but YEAR_FILTER environment variable is not set.');
+            console.error('Error: HARVEST_SCOPE is "year" but YEAR_FILTER (or YEAR) environment variable is not set.');
+            process.exit(1);
+        }
+        if (!/^\d{4}$/.test(year)) {
+            console.error(`Error: Invalid year value "${year}". Use a 4-digit year like 2026.`);
             process.exit(1);
         }
         return `${baseJql} AND (created >= "${year}-01-01" AND created <= "${year}-12-31") ORDER BY updated DESC`;
@@ -172,7 +177,7 @@ const processPage = (issues, isDiscovery, sprintNameMap) => {
 };
 
 const processIssue = (issue, isDiscovery, sprintNameMap) => {
-    const { upsertIssue, upsertWorklog, insertStatusTransition, insertIssueSprint, deleteIssueSprints } = getStatements();
+    const { upsertIssue, upsertWorklog, insertStatusTransition, insertIssueSprint, deleteIssueSprints, deleteStatusTransitions } = getStatements();
     
     upsertIssue.run([
         issue.key,
@@ -192,6 +197,8 @@ const processIssue = (issue, isDiscovery, sprintNameMap) => {
         issue.fields.worklog.worklogs.forEach(w => upsertWorklog.run([w.id, issue.key, w.author ? w.author.displayName : 'Unknown', w.started, w.timeSpentSeconds, w.comment]));
     }
 
+    // Replace transitions for this issue to avoid growth of duplicate history rows across sync runs.
+    deleteStatusTransitions.run([issue.key]);
     if (issue.changelog && issue.changelog.histories) {
         issue.changelog.histories.forEach(h => {
             h.items.forEach(item => {
@@ -254,27 +261,6 @@ const fetchIssuesForDiscovery = async () => {
     }
 };
 
-function generateDataStore() {
-    const db = getDb();
-    const issues = [];
-    const stmt = db.prepare('SELECT raw_json FROM issues');
-    while (stmt.step()) {
-        const row = stmt.getAsObject();
-        issues.push(JSON.parse(row.raw_json));
-    }
-    stmt.free();
-
-    const dataStore = {
-        issues: issues,
-        generatedAt: new Date().toISOString()
-    };
-
-    const dataStoreContent = `window.jiraStore = ${JSON.stringify(dataStore, null, 2)};`;
-    const dataStorePath = path.join(__dirname, '..', 'frontend', 'data-store.js');
-    fs.writeFileSync(dataStorePath, dataStoreContent);
-    console.log('data-store.js generated successfully.');
-}
-
 (async () => {
     JQL = buildJql();
     await initializeDatabase();
@@ -290,7 +276,6 @@ function generateDataStore() {
         processPage(allIssues, false, sprintNameMap);
     }
     saveDatabase();
-    generateDataStore();
 })().catch(err => {
     console.error("Operation failed:", err);
     process.exit(1);

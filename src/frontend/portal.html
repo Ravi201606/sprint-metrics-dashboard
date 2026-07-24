@@ -11,7 +11,7 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
     
     <!-- Lucide Icons CDN -->
-    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://unpkg.com/lucide@0.474.0"></script>
     
     <link rel="stylesheet" href="/src/frontend/layout.css">
 </head>
@@ -20,6 +20,7 @@
     <div class="aurora-orb orb-1"></div>
     <div class="aurora-orb orb-2"></div>
     <div class="aurora-orb orb-3"></div>
+    <div id="toast-host" class="toast-host" aria-live="polite" aria-atomic="false"></div>
 
     <!-- Rebuilt Premium Sticky Header (Requirement 1) -->
     <header class="top-header">
@@ -29,7 +30,7 @@
                 <i data-lucide="layout-dashboard" style="width: 22px; height: 22px; color: #ffffff;"></i>
             </div>
             <div class="team-info">
-                <h1>Development Team - CX Data</h1>
+                <h1>CX Suite - CX Data</h1>
                 <p class="subtitle">Sprint Analytics · Real-time insights</p>
             </div>
         </div>
@@ -63,7 +64,7 @@
                 <!-- Styled Sprint Selector Wrapper -->
                 <div class="filter-group" id="sprint-filter-group">
                     <div class="sprint-selector">
-                        <button class="sprint-trigger" id="sprintTrigger" type="button">
+                        <button class="sprint-trigger" id="sprintTrigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Select sprint">
                             <i data-lucide="calendar" class="sprint-icon"></i>
                             <span class="sprint-label">Sprint</span>
                             <span class="sprint-value">Select Sprint</span>
@@ -78,10 +79,13 @@
                     </select>
                 </div>
                 
-                <!-- Refresh/Sync Trigger Button (Icon-Only mapping to original sync ID) -->
-                <button id="sync-button" class="icon-sync-btn" title="Synchronize JIRA Data">
-                    <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i>
-                </button>
+                <!-- Refresh/Sync Trigger Button + live sync status -->
+                <div class="sync-control">
+                    <button id="sync-button" class="icon-sync-btn" title="Synchronize JIRA Data" aria-label="Synchronize JIRA data">
+                        <i data-lucide="refresh-cw" style="width: 16px; height: 16px;"></i>
+                    </button>
+                    <div id="sync-status" class="sync-status idle" role="status" aria-live="polite">Sync idle. Ready.</div>
+                </div>
                 
                 <!-- User Avatar Circle -->
                 <div class="user-avatar" title="DT - Active Admin">AS</div>
@@ -105,7 +109,7 @@
                     First Pass Yield
                 </h3>
                 <p class="widget-value" id="fpy-value">0%</p>
-                <div class="widget-trend trend-up">
+                <div id="fpy-trend" class="widget-trend trend-up" style="visibility:hidden;">
                     <span class="trend-badge">↑ 12.4%</span> vs last week
                 </div>
                 <p class="widget-sub" id="fpy-sub">Passed QA on first attempt</p>
@@ -123,7 +127,7 @@
                     Average Cycle Time
                 </h3>
                 <p class="widget-value" id="cycle-time-value">0 days</p>
-                <div class="widget-trend trend-down">
+                <div id="cycle-time-trend" class="widget-trend trend-down" style="visibility:hidden;">
                     <span class="trend-badge">↓ 8.2%</span> faster cycle
                 </div>
                 <p class="widget-sub" id="cycle-time-sub">Total: 0d / 0 items</p>
@@ -141,7 +145,7 @@
                     Maintenance Tax
                 </h3>
                 <p class="widget-value" id="maintenance-tax-value">0%</p>
-                <div class="widget-trend trend-up">
+                <div id="maintenance-trend" class="widget-trend trend-up" style="visibility:hidden;">
                     <span class="trend-badge">↑ 3.1%</span> admin task tax
                 </div>
                 <p class="widget-sub" id="maintenance-tax-sub">Total time on recurring tasks</p>
@@ -162,7 +166,7 @@
                     Sprint Progress
                 </h3>
                 <p class="widget-value" id="sprint-progress-value">0%</p>
-                <div class="widget-trend trend-up">
+                <div id="sprint-progress-trend" class="widget-trend trend-up" style="visibility:hidden;">
                     <span class="trend-badge">↑ 15.0%</span> completion pace
                 </div>
                 <p class="widget-sub" id="sprint-progress-sub">0 of 0 stories completed</p>
@@ -180,7 +184,7 @@
                     Defect Injection Rate
                 </h3>
                 <p class="widget-value" id="dir-value">0%</p>
-                <div class="widget-trend trend-down">
+                <div id="dir-trend" class="widget-trend trend-down" style="visibility:hidden;">
                     <span class="trend-badge">↓ 5.4%</span> fewer injects
                 </div>
                 <p class="widget-sub" id="dir-sub">Of completed stories with bugs</p>
@@ -198,10 +202,11 @@
                     Average Sprint Velocity
                 </h3>
                 <p class="widget-value" id="velocity-value">0</p>
-                <div class="widget-trend trend-up">
-                    <span class="trend-badge">↑ 10.2%</span> velocity rate
+                <div class="widget-trend trend-up" id="velocity-trend" style="visibility:hidden;">
+                    <span class="trend-badge">↑ 0%</span> velocity rate
                 </div>
                 <p class="widget-sub" id="velocity-sub">Story points completed</p>
+                <button class="view-data-btn" data-metric="velocity">View Data</button>
             </div>
         </div>
 
@@ -314,7 +319,7 @@
     <!-- Modal for Raw Data -->
     <div id="data-modal" class="modal">
         <div class="modal-content">
-            <span class="modal-close-btn">&times;</span>
+            <button type="button" class="modal-close-btn" aria-label="Close dialog">&times;</button>
             <h2 id="modal-title">Raw Data</h2>
             <div class="modal-body" id="modal-body">
                 <!-- Compliant List -->
@@ -339,7 +344,6 @@
 
     <!-- External Script Dependencies -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="/src/frontend/data-store.js"></script>
     <script src="/src/frontend/engine.js"></script>
     
     <!-- Trigger Lucide Creation Post-Load (100% Loop-Safe) -->
